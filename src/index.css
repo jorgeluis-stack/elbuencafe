@@ -1,0 +1,206 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,500;1,600;1,700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  /* ── Gourmet Color Palette ── */
+  --color-brand-green: #1A2E1A;
+  --color-brand-green-dark: #0D1A0D;
+  --color-brand-green-light: #2A4A2A;
+  --color-brand-crema: #F5F0E8;
+  --color-brand-crema-dark: #D4C9B5;
+  --color-brand-crema-light: #FDFBF7;
+  --color-brand-gold: #C9A96E;
+  --color-brand-gold-light: #E2CFA0;
+  --color-brand-gold-dark: #A68B4B;
+  --color-brand-charcoal: #1C1C1C;
+  --color-brand-warm-gray: #8A8070;
+
+  /* ── Dark Theme (estilo il Platto) ── */
+  --color-bg-primary: #0F1A0F;
+  --color-bg-card: #1A2E1A;
+  --color-bg-elevated: #243D24;
+  --color-text-primary: #FFFFFF;
+  --color-text-secondary: #B8C4B8;
+  --color-text-muted: #7A8A7A;
+  --color-border: #2A452A;
+  --color-success: #4A7C59;
+  --color-warning: #C0392B;
+
+  /* ── Typography ── */
+  --font-display: "Playfair Display", serif;
+  --font-serif: "Playfair Display", serif;
+  --font-sans: "Inter", sans-serif;
+}
+
+/* ── Base Resets ── */
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Display Font (Playfair) Utility ── */
+.font-display {
+  font-family: "Playfair Display", serif !important;
+}
+
+/* ── Serif Font (Cormorant Garamond) Utility ── */
+/* REMOVED: Cormorant Garamond replaced by Playfair Display for consistency */
+.font-serif {
+  font-family: "Playfair Display", serif !important;
+}
+
+/* ── Script / Italic Accent ── */
+/* REMOVED: Using Playfair Display Italic instead of Cormorant */
+.font-script {
+  font-family: "Playfair Display", serif !important;
+  font-style: italic !important;
+}
+
+/* ── Textured Background (subtle dot pattern over brand-green) ── */
+.textured-bg {
+  background-color: var(--color-brand-green);
+  background-image:
+    radial-gradient(rgba(201, 169, 110, 0.06) 1px, transparent 0),
+    radial-gradient(rgba(201, 169, 110, 0.06) 1px, transparent 0);
+  background-size: 24px 24px;
+  background-position: 0 0, 12px 12px;
+}
+
+/* ── Glassmorphism Card ── */
+.glass {
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.glass-light {
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+/* ── Gold Divider Line ── */
+.gold-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-brand-gold), transparent);
+}
+
+/* ── Gold Shimmer Animation ── */
+@keyframes shimmer-gold {
+  0% {
+    background-position: -200% 0;
+  }
+
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer-gold {
+  background: linear-gradient(90deg,
+      var(--color-brand-gold-dark) 0%,
+      var(--color-brand-gold-light) 40%,
+      var(--color-brand-gold) 60%,
+      var(--color-brand-gold-dark) 100%);
+  background-size: 200% 100%;
+  animation: shimmer-gold 3s ease-in-out infinite;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Fade-in animation ── */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.5s ease-out forwards;
+}
+
+/* ── Slow pulse for branding elements ── */
+@keyframes pulse-slow {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 3s ease-in-out infinite;
+}
+
+/* ── Scrollbar hiding ── */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ── Scrollbar visible (premium style) ── */
+.scrollbar-visible::-webkit-scrollbar {
+  height: 6px;
+}
+
+.scrollbar-visible::-webkit-scrollbar-track {
+  background: rgba(201, 169, 110, 0.1);
+  border-radius: 3px;
+}
+
+.scrollbar-visible::-webkit-scrollbar-thumb {
+  background: var(--color-brand-gold);
+  border-radius: 3px;
+}
+
+.scrollbar-visible::-webkit-scrollbar-thumb:hover {
+  background: var(--color-brand-gold-dark);
+}
+
+/* ── Premium Button hover glow ── */
+.btn-glow {
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-glow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 30%, rgba(201, 169, 110, 0.15) 50%, transparent 70%);
+  transform: translateX(-100%);
+  transition: transform 0.6s ease;
+}
+
+.btn-glow:hover::after {
+  transform: translateX(100%);
+}
+
+/* ── Gold border accent on cards ── */
+.card-gold-border {
+  border: 1px solid rgba(201, 169, 110, 0.2);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card-gold-border:hover {
+  border-color: rgba(201, 169, 110, 0.45);
+  box-shadow: 0 4px 24px rgba(201, 169, 110, 0.08);
+}

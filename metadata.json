@@ -1,0 +1,6 @@
+{
+  "name": "El Buen Café",
+  "description": "Sistema digital integral para El Buen Café, incluyendo menú interactivo para clientes, toma de comandas para meseros y pantalla de cocina (KDS).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
