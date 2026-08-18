@@ -2,8 +2,9 @@
 // Implementa: abrir cuenta → agregar productos → enviar a cocina → cobrar → liberar mesa
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { CATEGORIES, PRODUCTS } from '../data/menu';
+import { CATEGORIES, PRODUCTS, CATEGORY_ACCENTS } from '../data/menu';
 import { Product, CategoryId, CartItemOption, CarroItem, Extra } from '../types';
+import { useDeviceType } from '../hooks/useDeviceType';
 import {
   Plus,
   Minus,
@@ -22,23 +23,26 @@ import {
   RotateCcw,
   DollarSign,
   Banknote,
-  Search,
-  Star,
-  Users,
+   Search,
+   Star,
+   Users,
    Check,
    Eye,
    EyeOff,
    ChevronDown,
    ChevronUp,
    AlertTriangle,
-   ChefHat
+   ChefHat,
+   ShoppingCart
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAccount } from '../context/AccountContext';
+import type { CobroResultado } from '../context/AccountContext';
 import { Mesa, Minicomanda, EstadoMesa, ItemMinicomanda } from '../types';
 import { imprimirTicket } from '../utils/printer';
 import { obtenerItemsPorMinicomanda, actualizarSeatConfig, obtenerCuentaPorId, obtenerTodosLosExtras } from '../db/SupabaseQueries';
 import { supabase } from '../db/supabaseClient';
+import { ModalWrapper } from './ModalWrapper';
 
 // Formato de moneda mexicana: miles con coma, 2 decimales (ej. 1,565.00)
 const formatoMXN = (valor: number): string =>
@@ -129,6 +133,8 @@ export const WaiterView: React.FC = () => {
   const [showLiberarModal, setShowLiberarModal] = useState(false);
   const [showLiberarSuccessModal, setShowLiberarSuccessModal] = useState(false);
   const [numeroMesaLiberada, setNumeroMesaLiberada] = useState<string | null>(null);
+  // Resultado del cobro para mostrar modal profesional de confirmación
+  const [cobroSuccess, setCobroSuccess] = useState<CobroResultado | null>(null);
   // Nombres de meseros atendiendo cada mesa (para mostrar en selector)
   const [mesesConNombres, setMesesConNombres] = useState<Record<number, string>>({});
   // Comensales (asientos) seleccionados para cobrar. Vacío = todos.
@@ -159,6 +165,12 @@ export const WaiterView: React.FC = () => {
   // Diálogo de confirmación al enviar a cocina
   const [showEnvioModal, setShowEnvioModal] = useState(false);
   const [envioData, setEnvioData] = useState<{ items: CarroItem[]; total: number } | null>(null);
+
+  // Detección de dispositivo (solo para móvil)
+  const deviceType = useDeviceType();
+  const isMobile = deviceType === 'mobile';
+  // Sheet de comanda en móvil (abre desde bottom bar)
+  const [showMobileSheet, setShowMobileSheet] = useState(false);
 
   // Cargar items de cocina al montar el componente y al cambiar de mesa
   useEffect(() => {
@@ -201,7 +213,8 @@ export const WaiterView: React.FC = () => {
     const matchesCategory = product.category === activeTab;
     const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (product.description && product.description.toLowerCase().includes(searchQuery.toLowerCase()));
-    return matchesCategory && (searchQuery === '' || matchesSearch);
+    if (searchQuery !== '') return matchesSearch;
+    return matchesCategory;
   });
 
   // Handle mesa selection
@@ -320,12 +333,13 @@ export const WaiterView: React.FC = () => {
     metodo: 'efectivo' | 'electronico',
     referencia?: string
   ) => {
-    await cobrarAsientos(seats, pago, cambio, metodo, referencia);
+    const resultado = await cobrarAsientos(seats, pago, cambio, metodo, referencia);
     setShowCheckoutModal(false);
     setShowHistorial(false);
     setHistorialData(null);
     setComensalesSeleccionados([]);
     cobroPendienteRef.current = null;
+    if (resultado) setCobroSuccess(resultado);
   };
 
   // Ver historial
@@ -618,10 +632,95 @@ export const WaiterView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colaResolucion]);
 
+  // JSX del modal de éxito de cobro — se renderiza en ambas vistas (selección y
+  // detalle) porque al liberar la mesa (mesaSeleccionada = null) la vista cambia
+  // a "selección de mesas", que de otro modo omitiría el modal.
+  const cobroExitosoModal = (
+    <AnimatePresence>
+      {cobroSuccess && (
+        <div id="cobro-exitoso-modal" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.92, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.92, y: 20 }}
+            transition={{ duration: 0.25, type: 'spring', stiffness: 320, damping: 26 }}
+            className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-emerald-500/30 text-slate-800"
+          >
+            <div className="bg-gradient-to-r from-emerald-600 via-emerald-500 to-emerald-700 px-6 py-6 text-center relative text-white">
+              <div className="w-16 h-16 mx-auto bg-white/20 rounded-2xl flex items-center justify-center mb-3 shadow-md backdrop-blur-md">
+                <CheckCircle className="w-8 h-8 text-white" />
+              </div>
+              <h3 className="text-xl font-black uppercase tracking-wide">Cobro Exitoso</h3>
+              <p className="text-white/90 text-xs mt-1 font-medium">Mesa {cobroSuccess.mesaNumero}</p>
+            </div>
+
+            <div className="p-6 space-y-4 bg-emerald-50/50 text-center">
+              <CheckCircle className="w-12 h-12 text-emerald-500 mx-auto" />
+              {cobroSuccess.mesaLiberada ? (
+                <p className="text-slate-800 font-medium text-sm leading-relaxed">
+                  El pago de <strong>${formatoMXN(cobroSuccess.totalPagado)}</strong> se registró correctamente.
+                  La mesa <strong>{cobroSuccess.mesaNumero}</strong> ha quedado <strong>LIBRE</strong> y se encuentra disponible para atender a nuevos clientes.
+                </p>
+              ) : (
+                <p className="text-slate-800 font-medium text-sm leading-relaxed">
+                  Cobro registrado por <strong>${formatoMXN(cobroSuccess.totalPagado)}</strong>. Quedan <strong>{cobroSuccess.pendientesRestantes} comensal(es)</strong> por pagar en esta mesa.
+                </p>
+              )}
+            </div>
+
+            <div className="px-6 pb-6 space-y-2">
+              <h4 className="text-xs font-bold uppercase text-slate-500 mb-2">Resumen del cobro</h4>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="flex justify-between py-2 border-b border-slate-100">
+                  <span className="text-slate-600">Total cobrado</span>
+                  <span className="font-black text-slate-900">${formatoMXN(cobroSuccess.totalPagado)}</span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-slate-100">
+                  <span className="text-slate-600">Cambio</span>
+                  <span className="font-black text-slate-900">${formatoMXN(cobroSuccess.cambio)}</span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-slate-100">
+                  <span className="text-slate-600">Método</span>
+                  <span className="font-black text-slate-900">{cobroSuccess.metodoPago === 'efectivo' ? 'Efectivo' : '💳 Electrónico'}</span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-slate-100">
+                  <span className="text-slate-600">Atendido por</span>
+                  <span className="font-black text-slate-900">{meseroLogueado?.nombre || '—'}</span>
+                </div>
+                {cobroSuccess.referencia && (
+                  <div className="flex justify-between py-2 border-b border-slate-100 col-span-2">
+                    <span className="text-slate-600">Referencia</span>
+                    <span className="font-black text-slate-900">{cobroSuccess.referencia}</span>
+                  </div>
+                )}
+                {cobroSuccess.tipo === 'asientos' && cobroSuccess.asientosCobrados && (
+                  <div className="flex justify-between py-2 border-b border-slate-100 col-span-2">
+                    <span className="text-slate-600">Comensales cobrados</span>
+                    <span className="font-black text-slate-900">{cobroSuccess.asientosCobrados.join(', ')}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-center">
+              <button
+                onClick={() => setCobroSuccess(null)}
+                className="py-2.5 px-8 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-black text-sm shadow-lg shadow-emerald-600/30 transition-all"
+              >
+                Aceptar
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+
   // Renderizar selección de mesa
   if (!mesaSeleccionada) {
     return (
       <div id="waiter-view" className="min-h-screen bg-brand-green-dark p-4 flex flex-col">
+        {cobroExitosoModal}
         {/* Header */}
         <div className="bg-gradient-to-r from-brand-gold to-brand-gold-dark p-4 text-brand-green-dark rounded-xl shadow-lg mb-4">
           <h2 className="text-2xl font-bold text-center">Seleccionar Mesa</h2>
@@ -667,28 +766,386 @@ export const WaiterView: React.FC = () => {
           </div>
         </div>
 
-        {/* Footer actions */}
-        <div className="mt-4 p-4 bg-brand-crema-dark/10 rounded-xl">
+       </div>
+      );
+  }
+
+  // Render helper: comanda completa (título, alertas, pestañas de comensales, items, total).
+  // Reutilizado en panel tableta/desktop y en el bottom sheet móvil.
+  const renderComanda = () => (
+    <>
+      {/* Active Comanda Title */}
+      <div className="border-b border-brand-gold/15 pb-3 flex justify-between items-center gap-2">
+        <span className="text-xs uppercase font-extrabold tracking-[0.15em] text-brand-warm-gray">
+          Comanda Actual
+        </span>
+        <div className="bg-brand-green-dark text-brand-gold px-3 py-1.5 rounded-xl text-xs font-bold">
+          {carroLocal.length} conceptos
+        </div>
+      </div>
+
+      {/* Alertas de comandas devueltas por cocina */}
+      {cuentaActual && cuentaActual.estado === 'ABIERTA' && minicomandas.some(m => m.estado === 'DEVUELTA') && (
+        <div className="mt-2 p-3 bg-amber-50 border-2 border-amber-400 rounded-xl space-y-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+            <span className="text-xs font-black text-amber-800 uppercase tracking-wider">
+              Devuelta por cocina
+            </span>
+          </div>
+          {minicomandas.filter(m => m.estado === 'DEVUELTA').map(mini => {
+            const itemsMini = itemsDeCocina.filter(it => it.minicomanda_id === mini.id);
+            const seat = itemsMini.length > 0 ? itemsMini[0].seat_number : null;
+            return (
+              <div key={mini.id} className="bg-white rounded-lg p-2 border border-amber-200">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-amber-900">
+                    COM #{mini.id}{seat ? ` - Comensal ${seat}` : ''}
+                  </span>
+                  <span className="text-xs text-amber-700 font-mono font-bold">${mini.total.toFixed(2)}</span>
+                </div>
+                <div className="text-xs text-amber-700 space-y-0.5 mb-2">
+                  {itemsMini.map(it => (
+                    <div key={it.id} className="flex justify-between gap-2">
+                      <span>{it.cantidad}x {it.producto_id}</span>
+                      {it.notas && <span className="text-red-500 italic text-[10px] truncate max-w-[120px]">{it.notas}</span>}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleModificarDevuelta(mini)}
+                    className="flex-1 py-1.5 bg-amber-500 text-white rounded text-xs font-bold hover:bg-amber-600 transition-colors"
+                  >
+                    Modificar y reenviar
+                  </button>
+                  <button
+                    onClick={() => handleEliminarDevuelta(mini.id)}
+                    className="py-1.5 px-3 bg-red-100 text-red-700 rounded text-xs font-bold hover:bg-red-200 transition-colors"
+                    title="Eliminar sin modificar"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Tab Bar — un tab por comensal (etiquetas de comensales) */}
+      <div className="border-b border-brand-gold/15 pb-2 pt-2 min-w-0">
+        <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-visible scroll-smooth">
+          {asientosActivos.map(seat => {
+            const color = SEAT_COLORS[(seat - 1) % SEAT_COLORS.length];
+            const isActive = comensalActivo === seat;
+            const sub = subtotalPorAsiento[seat] || 0;
+            const tieneItems = (itemsPorAsiento[seat]?.length || 0) + (itemsDeCocina.filter(it => (it.seat_number || 1) === seat).length) > 0;
+            const editando = editingSeat === seat;
+            return (
+              <button
+                key={seat}
+                onClick={() => { if (!editando) setComensalActivo(seat); }}
+                className={`relative flex-shrink-0 min-w-[60px] px-3 py-2 rounded-xl text-xs font-bold transition-all border ${isActive
+                  ? `${color.active} shadow-md`
+                  : `bg-white ${color.text} ${color.border} hover:${color.bg}`
+                  }`}
+              >
+                {editando ? (
+                  <input
+                    autoFocus
+                    value={editingName}
+                    onChange={e => setEditingName(e.target.value)}
+                    onClick={e => e.stopPropagation()}
+                    onBlur={() => { guardarNombreAsiento(seat, editingName); setEditingSeat(null); }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') { guardarNombreAsiento(seat, editingName); setEditingSeat(null); }
+                      if (e.key === 'Escape') { setEditingSeat(null); }
+                    }}
+                    className="w-14 text-center bg-transparent outline-hidden text-[10px] font-black"
+                    placeholder="Nombre"
+                    maxLength={20}
+                  />
+                ) : (
+                  <>
+                    <div className="font-black max-w-[72px] truncate">{obtenerNombreAsiento(seat)}</div>
+                    <div className="text-[10px] opacity-80 font-mono">${formatoMXN(sub)}</div>
+                  </>
+                )}
+                {/* Botón ✏️ (solo tab activo, touch-friendly) */}
+                {isActive && !editando && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingSeat(seat);
+                      setEditingName(cuentaActual?.seat_config?.[String(seat)]?.nombre || '');
+                    }}
+                    className="absolute -top-1.5 -right-1.5 w-6 h-6 p-1 bg-white rounded-full shadow flex items-center justify-center text-[10px] hover:scale-110 transition-transform"
+                    title="Renombrar comensal"
+                  >
+                    ✏️
+                  </button>
+                )}
+                {/* Botón × para eliminar tab vacío (sin items) */}
+                {!tieneItems && !isActive && !editando && (
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      eliminarComensalVacio(seat);
+                    }}
+                    className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full text-[10px] flex items-center justify-center hover:bg-red-600 active:scale-90 transition-all z-10 cursor-pointer"
+                    title="Eliminar comensal vacío"
+                  >×</span>
+                )}
+              </button>
+            );
+          })}
+          {/* Botón + para agregar comensal (máx 15) */}
           <button
-            onClick={async () => { await logoutMesero(); window.dispatchEvent(new Event('open_role_modal')); }}
-            className="w-full py-3 text-red-300 hover:text-red-200 text-sm font-bold uppercase tracking-wider"
+            onClick={() => {
+              const maxSeat = asientosActivos.length > 0 ? Math.max(...asientosActivos) : 0;
+              if (maxSeat >= 15) {
+                alert('Máximo 15 comensales por mesa');
+                return;
+              }
+              const nuevo = maxSeat + 1;
+              setAsientosDeCocina(prev => {
+                const base = prev.includes(comensalActivo) ? prev : [...prev, comensalActivo];
+                return [...base, nuevo];
+              });
+              setComensalActivo(nuevo);
+            }}
+            className="flex-shrink-0 w-10 h-10 rounded-xl border-2 border-dashed border-brand-gold/30 flex items-center justify-center text-brand-gold/50 hover:border-brand-gold hover:text-brand-gold transition-colors"
+            title="Agregar comensal"
           >
-            Cerrar Sesi��n
+            <Plus className="w-4 h-4" />
           </button>
         </div>
       </div>
-    );
-  }
+
+      {/* Items del comensal activo: carro local + enviados a cocina */}
+      <div className="flex-1 overflow-y-auto py-3 space-y-3 pr-1">
+        {(() => {
+          const itemsCarroDelAsiento = itemsPorAsiento[comensalActivo] || [];
+          const itemsBDDelAsiento = itemsDeCocina.filter(it => (it.seat_number || 1) === comensalActivo);
+          const totalItems = itemsCarroDelAsiento.length + itemsBDDelAsiento.length;
+
+          if (totalItems === 0) {
+            return (
+              <div className="h-full flex flex-col items-center justify-center text-center p-6 text-brand-warm-gray/60 space-y-2">
+                <ClipboardList className="w-10 h-10 stroke-1 text-brand-warm-gray/40" />
+                <p className="text-xs font-bold uppercase tracking-wider">C.{comensalActivo} sin items</p>
+                <p className="text-[10px] text-brand-warm-gray/50">Selecciona productos y asígnalos a este comensal.</p>
+              </div>
+            );
+          }
+
+          return (
+            <>
+              {/* Items del carro local (pendientes de enviar a cocina) */}
+              {itemsCarroDelAsiento.map(item => {
+                const optExtra = (item.selectedOptions || []).reduce((sum: number, o: any) => sum + o.extraPrice, 0);
+                const extrasTotal = (item.selectedExtras || []).reduce((eSum: number, e: any) => eSum + e.precio, 0);
+                const itemSinglePrice = item.product.price + optExtra + extrasTotal;
+
+                return (
+                  <div key={`carro-${item.id}`} className="bg-white/80 rounded-xl p-3 border border-brand-crema-dark/20 space-y-2.5 text-slate-800 shadow-sm">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          {item.sharedWith && item.sharedWith.length > 0 && (
+                            <span className="bg-purple-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide">⇄</span>
+                          )}
+                          <span className="text-xs font-black text-brand-green-dark">{item.product.name}</span>
+                        </div>
+                        {(item.selectedOptions || []).length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-0.5">
+                            {(item.selectedOptions || []).map((opt: any) => (
+                              <span key={opt.choiceName} className="text-[9px] font-bold text-brand-green-dark bg-brand-gold/15 px-1.5 py-0.5 rounded">
+                                {opt.choiceName}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {item.sharedWith && item.sharedWith.length > 0 && (
+                          <div className="mt-1 text-[9px] font-bold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded inline-block">
+                            Compartido: {item.sharedWith.map(s => `C.${s.seat} ${s.porcentaje}%`).join(' + ')}
+                          </div>
+                        )}
+                      </div>
+
+                      <span className="text-xs font-mono font-bold text-brand-green-dark shrink-0">
+                        ${formatoMXN(itemSinglePrice * item.quantity)}
+                      </span>
+                    </div>
+
+                    {item.notes && item.notes.trim() !== '' && (
+                      <div className="flex items-start gap-1.5 mt-2 bg-brand-crema/50 p-2 rounded-lg border-l-2 border-brand-gold/30">
+                        <MessageSquare className="w-3 h-3 text-brand-warm-gray/60 mt-0.5 shrink-0" />
+                        <p className="text-[10px] italic text-brand-warm-gray">{item.notes}</p>
+                      </div>
+                    )}
+
+                    <div className="flex justify-between items-center border-t border-brand-crema-dark/10 pt-2 mt-2">
+                      <button
+                        onClick={() => removeFromCarro(item.id)}
+                        className="text-red-500 hover:text-red-600 p-1 rounded hover:bg-red-500/10 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        onClick={() => setShareItem(item)}
+                        className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wide bg-purple-500/10 text-purple-700 border border-purple-500/20 hover:bg-purple-500/20 transition-colors flex items-center gap-1"
+                      >
+                        <Users className="w-3 h-3" />
+                        {item.sharedWith && item.sharedWith.length > 0 ? 'Editar' : 'Compartir'}
+                      </button>
+
+                      <div className="flex items-center gap-2.5 bg-brand-crema-light border border-brand-crema-dark/20 rounded-md p-0.5">
+                        <button
+                          onClick={() => updateCarroQuantity(item.id, -1)}
+                          className="p-1 hover:bg-white rounded text-brand-warm-gray transition-colors"
+                        >
+                          <Minus className="w-3.5 h-3.5" />
+                        </button>
+                        <span className="w-5 text-center font-mono font-bold text-sm text-brand-green-dark">
+                          {item.quantity}
+                        </span>
+                        <button
+                          onClick={() => updateCarroQuantity(item.id, 1)}
+                          className="p-1 hover:bg-white rounded text-brand-warm-gray transition-colors"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Items enviados a cocina (BD) — solo lectura con indicador de estado */}
+              {itemsBDDelAsiento.map(itemBD => {
+                const nombreProd = PRODUCTS.find(p => p.id === itemBD.producto_id)?.name || itemBD.producto_id;
+                const estado = itemBD.estado_minicomanda || 'PENDIENTE';
+                const esListo = estado === 'LISTO';
+                const esDevuelto = estado === 'DEVUELTA';
+
+                let estadoBadge = null;
+                let borderClass = 'border-brand-crema-dark/20';
+                let bgClass = 'bg-brand-crema-light/50';
+
+                if (esListo) {
+                  estadoBadge = (
+                    <span className="inline-flex items-center gap-0.5 bg-emerald-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide">
+                      <CheckCircle className="w-2.5 h-2.5" /> Listo
+                    </span>
+                  );
+                  borderClass = 'border-emerald-300';
+                  bgClass = 'bg-emerald-50/50';
+                } else if (esDevuelto) {
+                  estadoBadge = (
+                    <span className="inline-flex items-center gap-0.5 bg-amber-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide">
+                      <AlertTriangle className="w-2.5 h-2.5" /> Devuelta
+                    </span>
+                  );
+                  borderClass = 'border-amber-300';
+                  bgClass = 'bg-amber-50/50';
+                } else {
+                  estadoBadge = (
+                    <span className="inline-flex items-center gap-0.5 bg-blue-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide">
+                      En cocina
+                    </span>
+                  );
+                }
+
+                return (
+                  <div key={`bd-${itemBD.id}`} className={`${bgClass} rounded-xl p-3 border ${borderClass} space-y-2 text-slate-800 shadow-sm`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[9px] font-bold text-brand-warm-gray/70">#{itemBD.cantidad}</span>
+                          <span className="text-xs font-black text-brand-green-dark">{nombreProd}</span>
+                          {estadoBadge}
+                        </div>
+                        {itemBD.notas && itemBD.notas.trim() !== '' && (
+                          <div className="flex items-start gap-1 mt-1">
+                            <MessageSquare className="w-3 h-3 text-brand-warm-gray/50 mt-0.5 shrink-0" />
+                            <p className="text-[10px] italic text-brand-warm-gray">{itemBD.notas}</p>
+                          </div>
+                        )}
+                      </div>
+
+                      <span className="text-xs font-mono font-bold text-brand-green-dark shrink-0">
+                        ${formatoMXN(itemBD.total_item)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          );
+        })()}
+      </div>
+
+      {/* Pricing Summary & Send CTA */}
+      <div className="border-t border-brand-gold/15 pt-4 mt-3 space-y-4 shrink-0">
+        <div className="flex justify-between items-baseline font-mono">
+          <span className="text-xs uppercase font-extrabold tracking-[0.15em] text-brand-warm-gray font-sans">Total:</span>
+          <span className="text-2xl font-black text-brand-green-dark">
+             ${formatoMXN(calcularSubtotalCuenta())}
+          </span>
+        </div>
+
+        <button
+          onClick={async () => {
+            const result = await enviarACocina();
+            if (result.ok && result.items) {
+              setEnvioData({ items: result.items, total: result.total || 0 });
+              setShowEnvioModal(true);
+            } else if (!result.ok && result.error) {
+              alert(result.error);
+            }
+          }}
+          disabled={carroLocal.length === 0 || enviandoACocina}
+          className={`w-full py-4 rounded-2xl font-bold flex flex-col items-center justify-center shadow-lg transition-all active:scale-[0.99] ${carroLocal.length === 0 || enviandoACocina
+            ? 'bg-brand-crema-dark/50 border border-brand-crema-dark text-brand-warm-gray/50 cursor-not-allowed'
+            : 'bg-gradient-to-r from-brand-gold to-brand-gold-dark hover:from-brand-gold-light hover:to-brand-gold text-brand-green-dark shadow-brand-gold/20 btn-glow cursor-pointer'
+            }`}
+        >
+          <span className="text-xl font-black uppercase tracking-tighter font-display">
+            {enviandoACocina ? 'Enviando...' : 'Enviar a Cocina'}
+          </span>
+          <span className="text-[10px] opacity-70 uppercase font-bold tracking-widest">
+            {enviandoACocina ? 'Procesando comanda' : 'Imprimir Comanda'}
+          </span>
+        </button>
+
+        {/* Botón Cuenta — Acción de cobro (reubicado desde header) */}
+        <button
+          onClick={verHistorialCompleto}
+          className="w-full py-4 rounded-2xl font-bold flex flex-col items-center justify-center shadow-lg transition-all active:scale-[0.99] bg-white text-brand-green-dark border-2 border-brand-gold hover:bg-brand-crema hover:shadow-brand-gold/20 cursor-pointer"
+          title="Ver consumos de la mesa y cobrar"
+        >
+          <span className="text-xl font-black uppercase tracking-tighter font-display">
+            Cuenta
+          </span>
+          <span className="text-[10px] opacity-70 uppercase font-bold tracking-widest">
+            Cobrar y liberar
+          </span>
+        </button>
+      </div>
+    </>
+  );
 
   // Renderizar vista principal con mesa seleccionada
   return (
     <div id="waiter-view" className="h-[calc(100dvh-4rem)] bg-brand-green-dark p-4 flex flex-col overflow-hidden">
-      {/* Header con info de mesa */}
-      <div className="bg-gradient-to-r from-brand-green to-brand-green-dark rounded-t-xl px-5 py-4 flex flex-wrap gap-4 items-center justify-between border-b border-brand-gold/15 shadow-lg">
+       {/* Header con info de mesa */}
+      <div className="bg-gradient-to-r from-brand-green to-brand-green-dark px-5 py-4 flex flex-wrap gap-4 items-center justify-between border-b border-brand-gold/15 shadow-lg">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-brand-gold/20 flex items-center justify-center">
-            <ClipboardList className="w-5 h-5 text-brand-gold" />
-          </div>
+          
+          <ClipboardList className="w-5 h-5 text-brand-gold" />
           <div>
             <h2 className="text-base font-display font-bold tracking-tight text-white">Toma de Orden</h2>
             <p className="text-xs text-white/70">
@@ -719,15 +1176,6 @@ export const WaiterView: React.FC = () => {
             </button>
           )}
 
-          <button
-            onClick={verHistorialCompleto}
-            className="flex items-center gap-3 px-7 py-4 rounded-xl bg-gradient-to-r from-brand-gold to-brand-gold-dark hover:from-brand-gold-light hover:to-brand-gold text-brand-green-dark font-black text-base shadow-lg shadow-brand-gold/25 hover:shadow-brand-gold/40 transition-all"
-            title="Ver consumos de la mesa y cobrar"
-          >
-            <Receipt className="w-6 h-6" />
-            <span>Cuenta</span>
-          </button>
-
           <div className="h-8 w-px bg-white/15"></div>
 
           <div className="flex items-center gap-2">
@@ -746,9 +1194,9 @@ export const WaiterView: React.FC = () => {
       </div>
 
       {/* Main split-view tablet layout */}
-      <div className="flex-1 grid grid-cols-1 grid-rows-2 lg:grid-rows-1 lg:grid-cols-10 gap-3 mt-3 overflow-hidden min-h-0">
+      <div className="flex-1 grid grid-cols-1 grid-rows-1 md:grid-rows-1 md:grid-cols-10 gap-3 mt-3 overflow-hidden min-h-0">
         {/* Left Side (60%): Categories & Fast Product Grid */}
-        <div className="lg:col-span-6 bg-brand-green/40 backdrop-blur-md rounded-b-xl lg:rounded-b-none lg:rounded-bl-xl p-4 flex flex-col min-h-0 border border-brand-gold/10 overflow-hidden">
+        <div className="md:col-span-6 bg-brand-green/40 backdrop-blur-md rounded-b-xl md:rounded-b-none md:rounded-bl-xl p-4 flex flex-col min-h-0 border border-brand-gold/10 overflow-hidden md:pb-4 pb-[calc(4rem+16px)]">
           {/* Categories Pills */}
           <div className="relative">
             {/* Scroll indicator left */}
@@ -757,18 +1205,31 @@ export const WaiterView: React.FC = () => {
             <div className="absolute right-0 top-0 bottom-3 w-8 bg-gradient-to-l from-brand-green/40 to-transparent pointer-events-none z-10" />
 
             <div className="flex gap-2 overflow-x-auto pb-3 mb-4 scrollbar-visible scroll-smooth border-b border-brand-gold/10 select-none">
-              {CATEGORIES.filter(c => c.id !== 'especiales').map((cat) => (
-                <button
-                  key={cat.id}
-                  onClick={() => setActiveTab(cat.id)}
-                  className={`text-sm font-bold py-2.5 px-5 rounded-lg shrink-0 transition-all duration-300 whitespace-nowrap ${activeTab === cat.id
-                    ? 'bg-brand-gold text-brand-green-dark border-2 border-brand-gold scale-105 shadow-lg'
-                    : 'bg-brand-green/50 text-brand-crema/60 border border-brand-gold/10 hover:bg-brand-green/85 hover:text-brand-crema'
+              {CATEGORIES.filter(c => c.id !== 'especiales').map((cat) => {
+                const accent = CATEGORY_ACCENTS[cat.id];
+                const isActive = activeTab === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => setActiveTab(cat.id)}
+                    className={`relative text-sm font-bold py-2.5 px-5 rounded-xl shrink-0 transition-all duration-300 whitespace-nowrap border-2 ${
+                      isActive
+                        ? `${accent.dot} text-brand-green-dark border-transparent shadow-lg scale-105`
+                        : `bg-brand-green/30 ${accent.text} ${accent.border} hover:bg-brand-green/60`
                     }`}
-                >
-                  {cat.icon} {cat.name}
-                </button>
-              ))}
+                  >
+                    <span
+                      className={`absolute -top-1 -right-1.5 w-2.5 h-2.5 rounded-full ${
+                        isActive ? accent.dot : accent.dot + '/40'
+                      } ring-2 ring-brand-green-dark`}
+                    />
+                    <span className="flex items-center gap-1.5">
+                      <span>{cat.icon}</span>
+                      <span>{cat.name}</span>
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -779,14 +1240,14 @@ export const WaiterView: React.FC = () => {
               placeholder="Buscar producto..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 bg-white/5 text-brand-crema placeholder-brand-crema/30 rounded-xl text-sm border border-brand-gold/15 focus:border-brand-gold/40 focus:ring-1 focus:ring-brand-gold/20 outline-hidden transition-all"
+              className="w-full pl-10 pr-4 py-2.5 bg-brand-gold/10 text-brand-crema placeholder-brand-crema/40 rounded-xl text-sm border-2 border-brand-gold/50 ring-1 ring-brand-gold/20 focus:border-brand-gold focus:ring-2 focus:ring-brand-gold/40 outline-hidden transition-all"
             />
-            <Search className="absolute left-3.5 top-3 w-4 h-4 text-brand-gold/50" />
+            <Search className="absolute left-3.5 top-3 w-5 h-5 text-brand-gold" />
           </div>
 
           {/* Product grid with images */}
           <div className="flex-1 overflow-y-auto pr-1">
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
               {filteredProducts.map((product) => (
                 <motion.button
                   key={product.id}
@@ -794,20 +1255,18 @@ export const WaiterView: React.FC = () => {
                   whileTap={{ scale: 0.97 }}
                   className="bg-white rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200 flex flex-col text-left card-gold-border group cursor-pointer"
                 >
-                  {/* Product image */}
-                  <div className="h-32 sm:h-36 bg-brand-green-dark/5 overflow-hidden relative">
-                    {product.image ? (
-                      <img
-                        src={product.image}
-                        alt={product.name}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-3xl bg-gradient-to-br from-brand-crema to-brand-crema-dark/30">
-                        ☕
-                      </div>
-                    )}
+                  {/* Product image — solo tableta/desktop */}
+                  <div className={`overflow-hidden relative ${product.image ? 'hidden md:block' : 'hidden'}`}>
+                    <div className="h-32 sm:h-36 bg-brand-green-dark/5">
+                      {product.image && (
+                        <img
+                          src={product.image}
+                          alt={product.name}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                          referrerPolicy="no-referrer"
+                        />
+                      )}
+                    </div>
                     {product.popular && (
                       <span className="absolute top-2 left-2 bg-brand-gold text-brand-green-dark font-bold text-[8px] px-1.5 py-0.5 rounded-full uppercase tracking-wider shadow-md flex items-center gap-1">
                         <Star className="w-2.5 h-2.5 fill-current" />
@@ -816,13 +1275,20 @@ export const WaiterView: React.FC = () => {
                     )}
                   </div>
 
+                  {/* En móvil: icono/placeholder sutil */}
+                  {!product.image && (
+                    <div className="md:hidden h-16 bg-gradient-to-br from-brand-crema to-brand-crema-dark/30 flex items-center justify-center text-2xl">
+                      ☕
+                    </div>
+                  )}
+
                   {/* Product info */}
                   <div className="p-3 flex flex-col justify-between flex-1">
-                    <span className="text-xs font-bold leading-snug text-brand-green-dark line-clamp-2 min-h-[2.5rem]">
+                    <span className={`font-bold leading-snug text-brand-green-dark line-clamp-2 min-h-[2.5rem] ${product.image ? 'text-xs' : 'text-sm'}`}>
                       {product.name}
                     </span>
                     <div className="flex items-center justify-between mt-2">
-                      <span className="text-sm font-mono font-bold text-brand-green-dark">
+                      <span className="font-mono font-bold text-brand-green-dark">
                         ${formatoMXN(product.price)}
                       </span>
                       <span className="bg-brand-gold/20 text-brand-green-dark text-[10px] font-bold py-1 px-2 rounded-lg">
@@ -844,365 +1310,88 @@ export const WaiterView: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Side (40%): Live Comanda System */}
-        <div className="lg:col-span-4 bg-brand-crema rounded-xl p-4 flex flex-col min-h-0 border border-brand-crema-dark/30 overflow-hidden text-brand-green-dark">
-          {/* Active Comanda Title */}
-          <div className="border-b border-brand-gold/15 pb-3 flex justify-between items-center gap-2">
-            <span className="text-xs uppercase font-extrabold tracking-[0.15em] text-brand-warm-gray">
-              Comanda Actual
-            </span>
-            <div className="bg-brand-green-dark text-brand-gold px-3 py-1.5 rounded-xl text-xs font-bold">
-              {carroLocal.length} conceptos
-            </div>
-          </div>
-
-          {/* Alertas de comandas devueltas por cocina */}
-          {cuentaActual && cuentaActual.estado === 'ABIERTA' && minicomandas.some(m => m.estado === 'DEVUELTA') && (
-            <div className="mt-2 p-3 bg-amber-50 border-2 border-amber-400 rounded-xl space-y-2">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                <span className="text-xs font-black text-amber-800 uppercase tracking-wider">
-                  Devuelta por cocina
-                </span>
-              </div>
-              {minicomandas.filter(m => m.estado === 'DEVUELTA').map(mini => {
-                const itemsMini = itemsDeCocina.filter(it => it.minicomanda_id === mini.id);
-                const seat = itemsMini.length > 0 ? itemsMini[0].seat_number : null;
-                return (
-                  <div key={mini.id} className="bg-white rounded-lg p-2 border border-amber-200">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-bold text-amber-900">
-                        COM #{mini.id}{seat ? ` - Comensal ${seat}` : ''}
-                      </span>
-                      <span className="text-xs text-amber-700 font-mono font-bold">${mini.total.toFixed(2)}</span>
-                    </div>
-                    <div className="text-xs text-amber-700 space-y-0.5 mb-2">
-                      {itemsMini.map(it => (
-                        <div key={it.id} className="flex justify-between gap-2">
-                          <span>{it.cantidad}x {it.producto_id}</span>
-                          {it.notas && <span className="text-red-500 italic text-[10px] truncate max-w-[120px]">{it.notas}</span>}
-                        </div>
-                      ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleModificarDevuelta(mini)}
-                        className="flex-1 py-1.5 bg-amber-500 text-white rounded text-xs font-bold hover:bg-amber-600 transition-colors"
-                      >
-                        Modificar y reenviar
-                      </button>
-                      <button
-                        onClick={() => handleEliminarDevuelta(mini.id)}
-                        className="py-1.5 px-3 bg-red-100 text-red-700 rounded text-xs font-bold hover:bg-red-200 transition-colors"
-                        title="Eliminar sin modificar"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Tab Bar — un tab por comensal (Fase 1) */}
-          <div className="border-b border-brand-gold/15 pb-2 pt-2 min-w-0">
-            <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-visible scroll-smooth">
-              {asientosActivos.map(seat => {
-                const color = SEAT_COLORS[(seat - 1) % SEAT_COLORS.length];
-                const isActive = comensalActivo === seat;
-                const sub = subtotalPorAsiento[seat] || 0;
-                const tieneItems = (itemsPorAsiento[seat]?.length || 0) + (itemsDeCocina.filter(it => (it.seat_number || 1) === seat).length) > 0;
-                const editando = editingSeat === seat;
-                return (
-                  <button
-                    key={seat}
-                    onClick={() => { if (!editando) setComensalActivo(seat); }}
-                    className={`relative flex-shrink-0 min-w-[60px] px-3 py-2 rounded-xl text-xs font-bold transition-all border ${isActive
-                      ? `${color.active} shadow-md`
-                      : `bg-white ${color.text} ${color.border} hover:${color.bg}`
-                      }`}
-                  >
-                    {editando ? (
-                      <input
-                        autoFocus
-                        value={editingName}
-                        onChange={e => setEditingName(e.target.value)}
-                        onClick={e => e.stopPropagation()}
-                        onBlur={() => { guardarNombreAsiento(seat, editingName); setEditingSeat(null); }}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') { guardarNombreAsiento(seat, editingName); setEditingSeat(null); }
-                          if (e.key === 'Escape') { setEditingSeat(null); }
-                        }}
-                        className="w-14 text-center bg-transparent outline-hidden text-[10px] font-black"
-                        placeholder="Nombre"
-                        maxLength={20}
-                      />
-                    ) : (
-                      <>
-                        <div className="font-black max-w-[72px] truncate">{obtenerNombreAsiento(seat)}</div>
-                        <div className="text-[10px] opacity-80 font-mono">${formatoMXN(sub)}</div>
-                      </>
-                    )}
-                    {/* Botón ✏️ (solo tab activo, touch-friendly) */}
-                    {isActive && !editando && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingSeat(seat);
-                          setEditingName(cuentaActual?.seat_config?.[String(seat)]?.nombre || '');
-                        }}
-                        className="absolute -top-1.5 -right-1.5 w-6 h-6 p-1 bg-white rounded-full shadow flex items-center justify-center text-[10px] hover:scale-110 transition-transform"
-                        title="Renombrar comensal"
-                      >
-                        ✏️
-                      </button>
-                    )}
-                    {/* Botón × para eliminar tab vacío (sin items) */}
-                    {!tieneItems && !isActive && !editando && (
-                      <span
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          eliminarComensalVacio(seat);
-                        }}
-                        className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full text-[10px] flex items-center justify-center hover:bg-red-600 active:scale-90 transition-all z-10 cursor-pointer"
-                        title="Eliminar comensal vacío"
-                      >×</span>
-                    )}
-                  </button>
-                );
-              })}
-              {/* Botón + para agregar comensal (máx 15) */}
-              <button
-                onClick={() => {
-                  const maxSeat = asientosActivos.length > 0 ? Math.max(...asientosActivos) : 0;
-                  if (maxSeat >= 15) {
-                    alert('Máximo 15 comensales por mesa');
-                    return;
-                  }
-                  const nuevo = maxSeat + 1;
-                  setAsientosDeCocina(prev => {
-                    const base = prev.includes(comensalActivo) ? prev : [...prev, comensalActivo];
-                    return [...base, nuevo];
-                  });
-                  setComensalActivo(nuevo);
-                }}
-                className="flex-shrink-0 w-10 h-10 rounded-xl border-2 border-dashed border-brand-gold/30 flex items-center justify-center text-brand-gold/50 hover:border-brand-gold hover:text-brand-gold transition-colors"
-                title="Agregar comensal"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* Items del comensal activo: carro local + enviados a cocina */}
-          <div className="flex-1 overflow-y-auto py-3 space-y-3 pr-1">
-            {(() => {
-              const itemsCarroDelAsiento = itemsPorAsiento[comensalActivo] || [];
-              const itemsBDDelAsiento = itemsDeCocina.filter(it => (it.seat_number || 1) === comensalActivo);
-              const totalItems = itemsCarroDelAsiento.length + itemsBDDelAsiento.length;
-
-              if (totalItems === 0) {
-                return (
-                  <div className="h-full flex flex-col items-center justify-center text-center p-6 text-brand-warm-gray/60 space-y-2">
-                    <ClipboardList className="w-10 h-10 stroke-1 text-brand-warm-gray/40" />
-                    <p className="text-xs font-bold uppercase tracking-wider">C.{comensalActivo} sin items</p>
-                    <p className="text-[10px] text-brand-warm-gray/50">Selecciona productos y asígnalos a este comensal.</p>
-                  </div>
-                );
-              }
-
-              return (
-                <>
-                  {/* Items del carro local (pendientes de enviar a cocina) */}
-                  {itemsCarroDelAsiento.map(item => {
-                    const optExtra = (item.selectedOptions || []).reduce((sum: number, o: any) => sum + o.extraPrice, 0);
-                    const extrasTotal = (item.selectedExtras || []).reduce((eSum: number, e: any) => eSum + e.precio, 0);
-                    const itemSinglePrice = item.product.price + optExtra + extrasTotal;
-
-                    return (
-                      <div key={`carro-${item.id}`} className="bg-white/80 rounded-xl p-3 border border-brand-crema-dark/20 space-y-2.5 text-slate-800 shadow-sm">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              {item.sharedWith && item.sharedWith.length > 0 && (
-                                <span className="bg-purple-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide">⇄</span>
-                              )}
-                              <span className="text-xs font-black text-brand-green-dark">{item.product.name}</span>
-                            </div>
-                            {(item.selectedOptions || []).length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-0.5">
-                                {(item.selectedOptions || []).map((opt: any) => (
-                                  <span key={opt.choiceName} className="text-[9px] font-bold text-brand-green-dark bg-brand-gold/15 px-1.5 py-0.5 rounded">
-                                    {opt.choiceName}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                            {item.sharedWith && item.sharedWith.length > 0 && (
-                              <div className="mt-1 text-[9px] font-bold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded inline-block">
-                                Compartido: {item.sharedWith.map(s => `C.${s.seat} ${s.porcentaje}%`).join(' + ')}
-                              </div>
-                            )}
-                          </div>
-
-                          <span className="text-xs font-mono font-bold text-brand-green-dark shrink-0">
-                            ${formatoMXN(itemSinglePrice * item.quantity)}
-                          </span>
-                        </div>
-
-                        {item.notes && item.notes.trim() !== '' && (
-                          <div className="flex items-start gap-1.5 mt-2 bg-brand-crema/50 p-2 rounded-lg border-l-2 border-brand-gold/30">
-                            <MessageSquare className="w-3 h-3 text-brand-warm-gray/60 mt-0.5 shrink-0" />
-                            <p className="text-[10px] italic text-brand-warm-gray">{item.notes}</p>
-                          </div>
-                        )}
-
-                        <div className="flex justify-between items-center border-t border-brand-crema-dark/10 pt-2 mt-2">
-                          <button
-                            onClick={() => removeFromCarro(item.id)}
-                            className="text-red-500 hover:text-red-600 p-1 rounded hover:bg-red-500/10 transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-
-                          <button
-                            onClick={() => setShareItem(item)}
-                            className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wide bg-purple-500/10 text-purple-700 border border-purple-500/20 hover:bg-purple-500/20 transition-colors flex items-center gap-1"
-                          >
-                            <Users className="w-3 h-3" />
-                            {item.sharedWith && item.sharedWith.length > 0 ? 'Editar' : 'Compartir'}
-                          </button>
-
-                          <div className="flex items-center gap-2.5 bg-brand-crema-light border border-brand-crema-dark/20 rounded-md p-0.5">
-                            <button
-                              onClick={() => updateCarroQuantity(item.id, -1)}
-                              className="p-1 hover:bg-white rounded text-brand-warm-gray transition-colors"
-                            >
-                              <Minus className="w-3.5 h-3.5" />
-                            </button>
-                            <span className="w-5 text-center font-mono font-bold text-sm text-brand-green-dark">
-                              {item.quantity}
-                            </span>
-                            <button
-                              onClick={() => updateCarroQuantity(item.id, 1)}
-                              className="p-1 hover:bg-white rounded text-brand-warm-gray transition-colors"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  {/* Items enviados a cocina (BD) — solo lectura con indicador de estado */}
-                  {itemsBDDelAsiento.map(itemBD => {
-                    const nombreProd = PRODUCTS.find(p => p.id === itemBD.producto_id)?.name || itemBD.producto_id;
-                    const estado = itemBD.estado_minicomanda || 'PENDIENTE';
-                    const esListo = estado === 'LISTO';
-                    const esDevuelto = estado === 'DEVUELTA';
-
-                    let estadoBadge = null;
-                    let borderClass = 'border-brand-crema-dark/20';
-                    let bgClass = 'bg-brand-crema-light/50';
-
-                    if (esListo) {
-                      estadoBadge = (
-                        <span className="inline-flex items-center gap-0.5 bg-emerald-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide">
-                          <CheckCircle className="w-2.5 h-2.5" /> Listo
-                        </span>
-                      );
-                      borderClass = 'border-emerald-300';
-                      bgClass = 'bg-emerald-50/50';
-                    } else if (esDevuelto) {
-                      estadoBadge = (
-                        <span className="inline-flex items-center gap-0.5 bg-amber-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide">
-                          <AlertTriangle className="w-2.5 h-2.5" /> Devuelto
-                        </span>
-                      );
-                      borderClass = 'border-amber-300';
-                      bgClass = 'bg-amber-50/50';
-                    } else {
-                      estadoBadge = (
-                        <span className="inline-flex items-center gap-0.5 bg-blue-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wide">
-                          En cocina
-                        </span>
-                      );
-                    }
-
-                    return (
-                      <div key={`bd-${itemBD.id}`} className={`${bgClass} rounded-xl p-3 border ${borderClass} space-y-2 text-slate-800 shadow-sm`}>
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-[9px] font-bold text-brand-warm-gray/70">#{itemBD.cantidad}</span>
-                              <span className="text-xs font-black text-brand-green-dark">{nombreProd}</span>
-                              {estadoBadge}
-                            </div>
-                            {itemBD.notas && itemBD.notas.trim() !== '' && (
-                              <div className="flex items-start gap-1 mt-1">
-                                <MessageSquare className="w-3 h-3 text-brand-warm-gray/50 mt-0.5 shrink-0" />
-                                <p className="text-[10px] italic text-brand-warm-gray">{itemBD.notas}</p>
-                              </div>
-                            )}
-                          </div>
-
-                          <span className="text-xs font-mono font-bold text-brand-green-dark shrink-0">
-                            ${formatoMXN(itemBD.total_item)}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </>
-              );
-            })()}
-          </div>
-
-          {/* Pricing Summary & Send CTA */}
-          <div className="border-t border-brand-gold/15 pt-4 mt-3 space-y-4 shrink-0">
-            <div className="flex justify-between items-baseline font-mono">
-              <span className="text-xs uppercase font-extrabold tracking-[0.15em] text-brand-warm-gray font-sans">Total:</span>
-              <span className="text-2xl font-black text-brand-green-dark">
-                 ${formatoMXN(calcularSubtotalCuenta())}
-              </span>
-            </div>
-
-            <button
-              onClick={async () => {
-                const result = await enviarACocina();
-                if (result.ok && result.items) {
-                  setEnvioData({ items: result.items, total: result.total || 0 });
-                  setShowEnvioModal(true);
-                } else if (!result.ok && result.error) {
-                  alert(result.error);
-                }
-              }}
-              disabled={carroLocal.length === 0 || enviandoACocina}
-              className={`w-full py-4 rounded-2xl font-bold flex flex-col items-center justify-center shadow-lg transition-all active:scale-[0.99] ${carroLocal.length === 0 || enviandoACocina
-                ? 'bg-brand-crema-dark/50 border border-brand-crema-dark text-brand-warm-gray/50 cursor-not-allowed'
-                : 'bg-gradient-to-r from-brand-gold to-brand-gold-dark hover:from-brand-gold-light hover:to-brand-gold text-brand-green-dark shadow-brand-gold/20 btn-glow cursor-pointer'
-                }`}
-            >
-              <span className="text-xl font-black uppercase tracking-tighter font-display">
-                {enviandoACocina ? 'Enviando...' : 'Enviar a Cocina'}
-              </span>
-              <span className="text-[10px] opacity-70 uppercase font-bold tracking-widest">
-                {enviandoACocina ? 'Procesando comanda' : 'Imprimir Comanda'}
-              </span>
-            </button>
-
-          </div>
+        {/* Right Side (40%): Live Comanda System — visible solo en tablet/desktop */}
+        <div className="md:col-span-4 bg-brand-crema rounded-xl p-4 flex flex-col min-h-0 border border-brand-crema-dark/30 overflow-hidden text-brand-green-dark hidden md:flex">
+          {renderComanda()}
         </div>
       </div>
 
+      {/* ── Móvil: bottom bar (solo ícono) + sheet de comanda ── */}
+      {isMobile && (
+        <>
+          {/* Bottom bar móvil: solo ícono de carrito + badge */}
+          <motion.div
+            className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex justify-center pb-4"
+            initial={{ y: 100 }} animate={{ y: 0 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+          >
+            <motion.button
+              onClick={() => setShowMobileSheet(true)}
+              whileTap={{ scale: 0.93 }}
+              className="relative flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-r from-brand-gold to-brand-gold-dark text-brand-green-dark shadow-xl shadow-brand-gold/40 hover:from-brand-gold-light hover:to-brand-gold transition-all active:scale-95"
+              title="Ver comanda"
+            >
+              <ShoppingCart className="w-7 h-7" />
+              {(carroLocal.length + itemsDeCocina.length) > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[9px] font-black w-5 h-5 rounded-full flex items-center justify-center">
+                  {carroLocal.length + itemsDeCocina.length}
+                </span>
+              )}
+            </motion.button>
+          </motion.div>
+
+          {/* Bottom sheet móvil — reutiliza comanda completa con pestañas de comensales */}
+          <AnimatePresence>
+            {showMobileSheet && (
+              <>
+                <motion.div
+                  className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  onClick={() => setShowMobileSheet(false)}
+                />
+                <motion.div
+                  className="fixed bottom-0 left-0 right-0 z-50 bg-brand-crema rounded-t-3xl shadow-2xl overflow-hidden border-t border-brand-crema-dark/30"
+                  initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
+                  transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+                  drag="y"
+                  dragConstraints={{ top: 0, bottom: 0 }}
+                  dragElastic={{ top: 0, bottom: 0.35 }}
+                  dragSnapToOrigin
+                  onDragEnd={(_, info) => {
+                    if (info.offset.y > 120 || info.velocity.y > 600) {
+                      setShowMobileSheet(false);
+                    }
+                  }}
+                  onClick={e => e.stopPropagation()}
+                >
+                  {/* Muesca: barra de arrastre + flecha indicando dirección */}
+                  <div className="pt-3 pb-2 flex flex-col items-center gap-1 cursor-grab active:cursor-grabbing touch-none select-none">
+                    <div className="w-12 h-1.5 bg-brand-green-dark/30 rounded-full" />
+                    <ChevronDown className="w-4 h-4 text-brand-green-dark/40" />
+                  </div>
+                  {/* Contenido scrolleable (dragListener=false evita conflicto con el scroll) */}
+                  <motion.div
+                    dragListener={false}
+                    className="p-3 pb-[env(safe-area-inset-bottom)] max-h-[calc(100dvh-4rem-64px)] overflow-y-auto"
+                  >
+                    {renderComanda()}
+                  </motion.div>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
+        </>
+      )}
+
       {/* Modal de confirmación de reemplazo de mesero */}
+      <AnimatePresence>
       {solicitudReemplazo && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            transition={{ duration: 0.2 }}
             className="bg-white w-full max-w-sm rounded-3xl shadow-2xl overflow-hidden"
           >
             <div className="p-6 text-center">
@@ -1232,15 +1421,18 @@ export const WaiterView: React.FC = () => {
             </div>
           </motion.div>
         </div>
-      )}
+        )}
+      </AnimatePresence>
 
       {/* Diálogo: Comanda enviada a cocina */}
+      <AnimatePresence>
       {showEnvioModal && envioData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
+            transition={{ duration: 0.2 }}
             className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
           >
             <div className="p-6 text-center">
@@ -1301,23 +1493,21 @@ export const WaiterView: React.FC = () => {
                 Aceptar
               </button>
             </div>
-          </motion.div>
+            </motion.div>
         </div>
-      )}
-
-      {/* Product Detail Modal */}
-      <AnimatePresence>
-        {selectedProductDetail && (
-          <ProductDetailModalWaiter
-            product={selectedProductDetail}
-            onClose={() => setSelectedProductDetail(null)}
-            onAdd={(product, quantity, notes, options, extras) => {
-              agregarAlCarro(product, quantity, notes, options, extras, comensalActivo);
-              setSelectedProductDetail(null);
-            }}
-          />
         )}
       </AnimatePresence>
+
+      {/* Product Detail Modal */}
+      <ProductDetailModalWaiter
+        product={selectedProductDetail}
+        isOpen={!!selectedProductDetail}
+        onClose={() => setSelectedProductDetail(null)}
+        onAdd={(product, quantity, notes, options, extras) => {
+          agregarAlCarro(product, quantity, notes, options, extras, comensalActivo);
+          setSelectedProductDetail(null);
+        }}
+      />
 
       {/* Historial Modal - Diseño profesional tipo cuenta de restaurante */}
       <AnimatePresence>
@@ -1327,6 +1517,7 @@ export const WaiterView: React.FC = () => {
               initial={{ opacity: 0, scale: 0.92, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.92, y: 20 }}
+              transition={{ duration: 0.2 }}
               className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col border border-brand-gold/20"
             >
               {/* Header estilo factura */}
@@ -1525,7 +1716,8 @@ export const WaiterView: React.FC = () => {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-brand-crema-light w-full max-w-md rounded-2xl shadow-2xl overflow-hidden"
+              transition={{ duration: 0.2 }}
+              className="bg-brand-crema-light w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
             >
               <div className="bg-gradient-to-r from-brand-green to-brand-green-dark p-6 text-brand-crema text-center">
                 <div className="w-16 h-16 mx-auto bg-brand-crema rounded-full flex items-center justify-center mb-3 shadow-lg">
@@ -1553,7 +1745,7 @@ export const WaiterView: React.FC = () => {
                 </p>
               </div>
 
-              <div className="p-6 space-y-5">
+              <div className="p-6 space-y-5 overflow-y-auto">
                 {/* Resumen de comensales a cobrar en este pago */}
                 <div className="bg-brand-crema-dark/10 rounded-xl p-4 space-y-2">
                   <p className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1">Cobrando a:</p>
@@ -1738,6 +1930,8 @@ export const WaiterView: React.FC = () => {
               <motion.div
                 initial={{ opacity: 0, scale: 0.92, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.92, y: 20 }}
+                transition={{ duration: 0.2 }}
                 className="bg-white w-full max-w-sm rounded-3xl shadow-2xl overflow-hidden border border-purple-300"
               >
                 <div className="bg-gradient-to-r from-purple-700 to-purple-500 px-6 py-5 text-center relative">
@@ -1810,6 +2004,7 @@ export const WaiterView: React.FC = () => {
               initial={{ opacity: 0, scale: 0.92, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.92, y: 20 }}
+              transition={{ duration: 0.2 }}
               className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col border border-brand-gold/20"
             >
               <div className="bg-gradient-to-r from-brand-green-dark to-brand-green px-6 py-5 text-center relative">
@@ -1896,6 +2091,7 @@ export const WaiterView: React.FC = () => {
               initial={{ opacity: 0, scale: 0.92, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.92, y: 20 }}
+              transition={{ duration: 0.2 }}
               className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-amber-500/30 text-slate-800"
             >
               {/* Header de Alerta */}
@@ -1964,11 +2160,11 @@ export const WaiterView: React.FC = () => {
         {showLiberarSuccessModal && (
           <div id="liberar-mesa-success-modal" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
             <motion.div
-              initial={{ opacity: 0, scale: 0.92, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.92, y: 20 }}
-              transition={{ duration: 0.25, type: 'spring', stiffness: 320, damping: 26 }}
-              className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-emerald-500/30 text-slate-800"
+            initial={{ opacity: 0, scale: 0.92, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.92, y: 20 }}
+            transition={{ duration: 0.25, type: 'spring', stiffness: 320, damping: 26 }}
+            className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-emerald-500/30 text-slate-800"
             >
               {/* Header de Éxito */}
               <div className="bg-gradient-to-r from-emerald-600 via-emerald-500 to-emerald-700 px-6 py-6 text-center relative text-white">
@@ -1996,16 +2192,18 @@ export const WaiterView: React.FC = () => {
                   onClick={() => setShowLiberarSuccessModal(false)}
                   className="py-2.5 px-8 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-black text-sm shadow-lg shadow-emerald-600/30 transition-all"
                 >
-                  Aceptar
-                </button>
+                Aceptar
+              </button>
               </div>
             </motion.div>
           </div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-};
+          )}
+        </AnimatePresence>
+
+        {cobroExitosoModal}
+      </div>
+    );
+  };
 
 // ===== Modal de división por comensal (asiento) =====
 interface SeatSplitModalProps {
@@ -2068,6 +2266,7 @@ const SeatSplitModal: React.FC<SeatSplitModalProps> = ({
         initial={{ opacity: 0, scale: 0.92, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.92, y: 20 }}
+        transition={{ duration: 0.2 }}
         className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col border border-brand-gold/20"
       >
         <div className="bg-gradient-to-r from-brand-green-dark to-brand-green px-6 py-5 text-center relative">
@@ -2182,11 +2381,12 @@ const SeatSplitModal: React.FC<SeatSplitModalProps> = ({
 
 interface ProductDetailModalWaiterProps {
   product: Product;
+  isOpen: boolean;
   onClose: () => void;
   onAdd: (product: Product, quantity: number, notes: string, options: any[], extras: { nombre: string; precio: number }[]) => void;
 }
 
-const ProductDetailModalWaiter: React.FC<ProductDetailModalWaiterProps> = ({ product, onClose, onAdd }) => {
+const ProductDetailModalWaiter: React.FC<ProductDetailModalWaiterProps> = ({ product, isOpen, onClose, onAdd }) => {
   const [quantity, setQuantity] = useState<number>(1);
   const [notes, setNotes] = useState<string>('');
   const [selectedChoices, setSelectedChoices] = useState<{ [optionName: string]: { choiceName: string; extraPrice: number } }>({});
@@ -2210,6 +2410,7 @@ const ProductDetailModalWaiter: React.FC<ProductDetailModalWaiterProps> = ({ pro
 
   // Inicializar con opciones requeridas por defecto
   useEffect(() => {
+    if (!product) return;
     const defaults: { [optionName: string]: { choiceName: string; extraPrice: number } } = {};
     if (product.options) {
       product.options.forEach(opt => {
@@ -2237,6 +2438,7 @@ const ProductDetailModalWaiter: React.FC<ProductDetailModalWaiterProps> = ({ pro
   };
 
   const calculateItemPrice = () => {
+    if (!product) return 0;
     let price = product.price;
     Object.values(selectedChoices).forEach((choice: any) => {
       price += choice.extraPrice;
@@ -2277,13 +2479,14 @@ const ProductDetailModalWaiter: React.FC<ProductDetailModalWaiterProps> = ({ pro
   };
 
   return (
-    <div id="waiter-product-detail-modal" className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm">
-      <motion.div
-        initial={{ opacity: 0, y: 100 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 100 }}
-        className="relative bg-brand-crema-light w-full sm:max-w-md max-h-[92vh] sm:max-h-[85vh] rounded-t-2xl sm:rounded-2xl overflow-y-auto flex flex-col shadow-2xl"
-      >
+    <ModalWrapper
+      isOpen={isOpen}
+      variant="slideUp"
+      overlayClass="items-end sm:items-center p-0 sm:p-4"
+      cardClass="relative bg-brand-crema-light w-full sm:max-w-md max-h-[92vh] sm:max-h-[85vh] rounded-t-2xl sm:rounded-2xl overflow-y-auto flex flex-col shadow-2xl"
+    >
+      {() => (
+        <>
         {/* Close Button */}
         <button
           onClick={onClose}
@@ -2537,8 +2740,10 @@ const ProductDetailModalWaiter: React.FC<ProductDetailModalWaiterProps> = ({ pro
             <span className="font-display">Agregar a Comanda</span>
           </button>
         </div>
-      </motion.div>
-    </div>
+
+        </>
+      )}
+    </ModalWrapper>
   );
 };
 
@@ -2616,6 +2821,8 @@ const ShareItemModal: React.FC<ShareItemModalProps> = ({ item, unitPrice, onClos
       <motion.div
         initial={{ opacity: 0, scale: 0.92, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.92, y: 20 }}
+        transition={{ duration: 0.2 }}
         className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col border border-purple-300"
       >
         <div className="bg-gradient-to-r from-purple-700 to-purple-500 px-6 py-5 text-center relative">

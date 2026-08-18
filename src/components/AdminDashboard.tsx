@@ -40,6 +40,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { imprimirTicketReparto } from '../utils/printer';
+import { ModalWrapper } from './ModalWrapper';
 
 interface OrderWithPayment {
     id: string;
@@ -744,147 +745,131 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
             </AnimatePresence>
 
             {/* Report Modal */}
-            <AnimatePresence>
-                {showReport && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-                    >
-                        <motion.div
-                            initial={{ scale: 0.9, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            exit={{ scale: 0.9, opacity: 0 }}
-                            className="bg-brand-crema-light w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
-                        >
-                            <div className="bg-gradient-to-r from-brand-green-dark to-brand-green p-6 text-brand-crema">
-                                <div className="flex items-center justify-between">
-                                    <h2 className="text-xl font-bold">Reporte de Ventas</h2>
-                                    <button
-                                        onClick={() => setShowReport(false)}
-                                        className="text-brand-crema/70 hover:text-brand-crema"
-                                    >
-                                        <X className="w-6 h-6" />
-                                    </button>
-                                </div>
-                            </div>
-                            <div className="p-6">
-                                <div className="text-center mb-6">
-                                    <p className="text-sm text-brand-warm-gray/60">Fecha: {new Date(selectedDate).toLocaleDateString('es-MX', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
-                                    <p className="text-sm text-brand-warm-gray/60">Generado: {new Date().toLocaleString('es-MX')}</p>
-                                </div>
-
-                                <div className="space-y-6">
-                                    <div className="bg-brand-crema-dark/5 p-4 rounded-xl">
-                                        <h3 className="text-sm font-bold uppercase text-brand-warm-gray/60 mb-3">Resumen de Ventas</h3>
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <div>
-                                                <p className="text-xs text-brand-warm-gray/50">Ventas Totales</p>
-                                                <p className="text-xl font-bold text-brand-green-dark">${dailyStats.total.toFixed(2)}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-xs text-brand-warm-gray/50">Pedidos</p>
-                                                <p className="text-xl font-bold text-brand-green-dark">{dailyStats.count}</p>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="bg-brand-crema-dark/5 p-4 rounded-xl">
-                                        <h3 className="text-sm font-bold uppercase text-brand-warm-gray/60 mb-3">Método de Pago</h3>
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <div className="bg-red-500/10 p-3 rounded-lg">
-                                                <p className="text-xs text-red-500/70 mb-1">Efectivo</p>
-                                                <p className="text-xl font-bold text-red-500">${dailyStats.efectivo.toFixed(2)}</p>
-                                            </div>
-                                            <div className="bg-blue-500/10 p-3 rounded-lg">
-                                                <p className="text-xs text-blue-500/70 mb-1">Electrónico</p>
-                                                <p className="text-xl font-bold text-blue-500">${dailyStats.electronico.toFixed(2)}</p>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="bg-brand-crema-dark/5 p-4 rounded-xl">
-                                        <h3 className="text-sm font-bold uppercase text-brand-warm-gray/60 mb-3">Cotejo de Efectivo</h3>
-                                        <div className="grid grid-cols-3 gap-4">
-                                            <div>
-                                                <p className="text-xs text-brand-warm-gray/50">Dinero Físico</p>
-                                                <p className="text-lg font-bold text-brand-green-dark">${parseFloat(physicalCash || '0').toFixed(2)}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-xs text-brand-warm-gray/50">Reportado</p>
-                                                <p className="text-lg font-bold text-red-500">${dailyStats.efectivo.toFixed(2)}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-xs text-brand-warm-gray/50">Diferencia</p>
-                                                <p className={`text-lg font-bold ${difference === 0 ? 'text-green-600' : difference > 0 ? 'text-red-600' : 'text-yellow-600'}`}>
-                                                    ${difference.toFixed(2)}
-                                                </p>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="bg-brand-crema-dark/5 p-4 rounded-xl">
-                                        <h3 className="text-sm font-bold uppercase text-brand-warm-gray/60 mb-3">Detalles de Pedidos</h3>
-                                        <div className="space-y-4 max-h-60 overflow-y-auto">
-                                            {dailyOrders.map((order) => (
-                                                <div key={order.id} className="border-b border-brand-gold/10 pb-3 last:border-0">
-                                                    <div className="flex items-center justify-between mb-2">
-                                                        <span className="text-xs font-bold text-brand-gold">#{order.orderNumber}</span>
-                                                        <span className="text-xs text-brand-warm-gray/60">{order.type === 'local' ? 'Mesa ' + order.tableNumber : 'Domicilio'}</span>
-                                                    </div>
-                                                    <div className="text-xs text-brand-warm-gray/60 space-y-1">
-                                                        {order.items.map((item: any, idx: number) => {
-                                                            const optionExtra = item.selectedOptions.reduce((sum: number, opt: any) => sum + opt.extraPrice, 0);
-                                                            const itemPrice = (item.product.price + optionExtra) * item.quantity;
-                                                            return (
-                                                                <div key={idx}>
-                                                                    • {item.product.name} (x{item.quantity}) - ${itemPrice.toFixed(2)}
-                                                                    {item.selectedOptions.map((opt: any) => (
-                                                                        <span key={opt.choiceName} className="ml-2 text-brand-warm-gray/40">[{opt.choiceName}]</span>
-                                                                    ))}
-                                                                </div>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                    <div className="text-sm font-bold text-brand-green-dark mt-2 text-right">
-                                                        TOTAL: ${order.total.toFixed(2)}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </div>
-
+            <ModalWrapper
+                isOpen={showReport}
+                cardClass="bg-brand-crema-light w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
+            >
+                {() => (
+                    <>
+                        <div className="bg-gradient-to-r from-brand-green-dark to-brand-green p-6 text-brand-crema">
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-xl font-bold">Reporte de Ventas</h2>
                                 <button
-                                    onClick={handleDownloadReport}
-                                    className="w-full mt-6 bg-gradient-to-r from-brand-gold to-brand-gold-dark hover:from-brand-gold-light hover:to-brand-gold text-brand-green-dark font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2"
+                                    onClick={() => setShowReport(false)}
+                                    className="text-brand-crema/70 hover:text-brand-crema"
                                 >
-                                    <Download className="w-5 h-5" />
-                                    <span>Descargar Reporte</span>
+                                    <X className="w-6 h-6" />
                                 </button>
                             </div>
-                        </motion.div>
-                    </motion.div>
+                        </div>
+
+                        <div className="p-6">
+                            <div className="text-center mb-6">
+                                <p className="text-sm text-brand-warm-gray/60">Fecha: {new Date(selectedDate).toLocaleDateString('es-MX', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                                <p className="text-sm text-brand-warm-gray/60">Generado: {new Date().toLocaleString('es-MX')}</p>
+                            </div>
+
+                            <div className="space-y-6">
+                                <div className="bg-brand-crema-dark/5 p-4 rounded-xl">
+                                    <h3 className="text-sm font-bold uppercase text-brand-warm-gray/60 mb-3">Resumen de Ventas</h3>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <p className="text-xs text-brand-warm-gray/50">Ventas Totales</p>
+                                            <p className="text-xl font-bold text-brand-green-dark">${dailyStats.total.toFixed(2)}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-brand-warm-gray/50">Pedidos</p>
+                                            <p className="text-xl font-bold text-brand-green-dark">{dailyStats.count}</p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-brand-crema-dark/5 p-4 rounded-xl">
+                                    <h3 className="text-sm font-bold uppercase text-brand-warm-gray/60 mb-3">Método de Pago</h3>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="bg-red-500/10 p-3 rounded-lg">
+                                            <p className="text-xs text-red-500/70 mb-1">Efectivo</p>
+                                            <p className="text-xl font-bold text-red-500">${dailyStats.efectivo.toFixed(2)}</p>
+                                        </div>
+                                        <div className="bg-blue-500/10 p-3 rounded-lg">
+                                            <p className="text-xs text-blue-500/70 mb-1">Electrónico</p>
+                                            <p className="text-xl font-bold text-blue-500">${dailyStats.electronico.toFixed(2)}</p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-brand-crema-dark/5 p-4 rounded-xl">
+                                    <h3 className="text-sm font-bold uppercase text-brand-warm-gray/60 mb-3">Cotejo de Efectivo</h3>
+                                    <div className="grid grid-cols-3 gap-4">
+                                        <div>
+                                            <p className="text-xs text-brand-warm-gray/50">Dinero Físico</p>
+                                            <p className="text-lg font-bold text-brand-green-dark">${parseFloat(physicalCash || '0').toFixed(2)}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-brand-warm-gray/50">Reportado</p>
+                                            <p className="text-lg font-bold text-red-500">${dailyStats.efectivo.toFixed(2)}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-brand-warm-gray/50">Diferencia</p>
+                                            <p className={`text-lg font-bold ${difference === 0 ? 'text-green-600' : difference > 0 ? 'text-red-600' : 'text-yellow-600'}`}>
+                                                ${difference.toFixed(2)}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-brand-crema-dark/5 p-4 rounded-xl">
+                                    <h3 className="text-sm font-bold uppercase text-brand-warm-gray/60 mb-3">Detalles de Pedidos</h3>
+                                    <div className="space-y-4 max-h-60 overflow-y-auto">
+                                        {dailyOrders.map((order) => (
+                                            <div key={order.id} className="border-b border-brand-gold/10 pb-3 last:border-0">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <span className="text-xs font-bold text-brand-gold">#{order.orderNumber}</span>
+                                                    <span className="text-xs text-brand-warm-gray/60">{order.type === 'local' ? 'Mesa ' + order.tableNumber : 'Domicilio'}</span>
+                                                </div>
+                                                <div className="text-xs text-brand-warm-gray/60 space-y-1">
+                                                    {order.items.map((item: any, idx: number) => {
+                                                        const optionExtra = item.selectedOptions.reduce((sum: number, opt: any) => sum + opt.extraPrice, 0);
+                                                        const itemPrice = (item.product.price + optionExtra) * item.quantity;
+                                                        return (
+                                                            <div key={idx}>
+                                                                • {item.product.name} (x{item.quantity}) - ${itemPrice.toFixed(2)}
+                                                                {item.selectedOptions.map((opt: any) => (
+                                                                    <span key={opt.choiceName} className="ml-2 text-brand-warm-gray/40">[{opt.choiceName}]</span>
+                                                                ))}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <div className="text-sm font-bold text-brand-green-dark mt-2 text-right">
+                                                    TOTAL: ${order.total.toFixed(2)}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <button
+                                onClick={handleDownloadReport}
+                                className="w-full mt-6 bg-gradient-to-r from-brand-gold to-brand-gold-dark hover:from-brand-gold-light hover:to-brand-gold text-brand-green-dark font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2"
+                            >
+                                <Download className="w-5 h-5" />
+                                <span>Descargar Reporte</span>
+                            </button>
+                        </div>
+                    </>
                 )}
-            </AnimatePresence>
+            </ModalWrapper>
 
             {/* Configuración Modal */}
-            <AnimatePresence>
-                {showConfigModal && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-                    >
-                        <motion.div
-                            initial={{ scale: 0.9, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            exit={{ scale: 0.9, opacity: 0 }}
-                            className="bg-brand-crema-light w-full max-w-md rounded-2xl shadow-2xl overflow-hidden"
-                        >
-                            <div className="bg-gradient-to-r from-brand-gold to-brand-gold-dark p-6 text-brand-green-dark">
+            <ModalWrapper
+                isOpen={showConfigModal}
+                cardClass="bg-brand-crema-light w-full max-w-md rounded-2xl shadow-2xl overflow-hidden"
+            >
+                {() => (
+                    <>
+                        <div className="bg-gradient-to-r from-brand-gold to-brand-gold-dark p-6 text-brand-green-dark">
                                 <div className="flex items-center justify-between">
                                     <h2 className="text-xl font-bold">Configuración de Credenciales</h2>
                                     <button
@@ -988,26 +973,17 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                     </button>
                                 </div>
                             </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                        </>
+                    )}
+                </ModalWrapper>
 
-            {/* Gestión de Empleados Modal */}
-            <AnimatePresence>
-                {showEmployeeManager && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-                    >
-                        <motion.div
-                            initial={{ scale: 0.9, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            exit={{ scale: 0.9, opacity: 0 }}
-                            className="bg-brand-crema-light w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
-                        >
+                {/* Gestión de Empleados Modal */}
+                <ModalWrapper
+                    isOpen={showEmployeeManager}
+                    cardClass="bg-brand-crema-light w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+                >
+                    {() => (
+                        <>
                             <div className="bg-gradient-to-r from-brand-green-dark to-brand-green p-6 text-brand-crema">
                                 <div className="flex items-center justify-between">
                                     <h2 className="text-xl font-bold">Gestión de Empleados</h2>
@@ -1258,26 +1234,17 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                     )}
                                 </div>
                             </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                        </>
+                    )}
+                </ModalWrapper>
 
-            {/* Extras Manager Modal */}
-            <AnimatePresence>
-                {showExtrasManager && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-                    >
-                        <motion.div
-                            initial={{ scale: 0.9, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            exit={{ scale: 0.9, opacity: 0 }}
-                            className="bg-brand-crema-light w-full max-w-2xl rounded-2xl shadow-2xl max-h-[80vh] flex flex-col"
-                        >
+                {/* Extras Manager Modal */}
+                <ModalWrapper
+                    isOpen={showExtrasManager}
+                    cardClass="bg-brand-crema-light w-full max-w-2xl rounded-2xl shadow-2xl max-h-[80vh] flex flex-col"
+                >
+                    {() => (
+                        <>
                             <div className="bg-gradient-to-r from-pink-500 to-pink-600 p-6 text-white">
                                 <div className="flex items-center justify-between">
                                     <h2 className="text-xl font-bold">Gestión de Extras</h2>
@@ -1444,26 +1411,17 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                     </div>
                                 )}
                             </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                        </>
+                    )}
+                </ModalWrapper>
 
-            {/* Checkout Modal */}
-            <AnimatePresence>
-                {showCheckoutModal && selectedOrderForCheckout && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-                    >
-                        <motion.div
-                            initial={{ scale: 0.9, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            exit={{ scale: 0.9, opacity: 0 }}
-                            className="bg-brand-crema-light w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
-                        >
+{/* Checkout Modal */}
+                <ModalWrapper
+                    isOpen={showCheckoutModal && !!selectedOrderForCheckout}
+                    cardClass="bg-brand-crema-light w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
+                >
+                    {() => (
+                        <>
                             <div className="bg-gradient-to-r from-brand-gold to-brand-gold-dark p-6 text-brand-green-dark">
                                 <div className="flex items-center justify-between">
                                     <h2 className="text-xl font-bold">Checkout - Generar Cuenta</h2>
@@ -1568,26 +1526,17 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                     <span>Confirmar Pago</span>
                                 </button>
                             </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                        </>
+                    )}
+                </ModalWrapper>
 
-            {/* Corte de Caja Modal */}
-            <AnimatePresence>
-                {showCorteModal && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-                    >
-                        <motion.div
-                            initial={{ scale: 0.9, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            exit={{ scale: 0.9, opacity: 0 }}
-                            className="bg-brand-crema-light w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
-                        >
+{/* Corte de Caja Modal */}
+                <ModalWrapper
+                    isOpen={showCorteModal}
+                    cardClass="bg-brand-crema-light w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
+                >
+                    {() => (
+                        <>
                             <div className="bg-gradient-to-r from-red-700 to-red-900 p-6 text-white">
                                 <div className="flex items-center justify-between">
                                     <h2 className="text-xl font-bold flex items-center gap-2">
@@ -1668,13 +1617,12 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                         <span>Realizar Corte</span>
                                     </button>
                                 </div>
-                            </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </div>
-    );
+</div>
+                            </>
+                        )}
+                    </ModalWrapper>
+                </div>
+                );
 };
 
 // Separate component for menu management
@@ -1746,12 +1694,14 @@ const AdminMenuManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
             className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
         >
             <motion.div
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
+                transition={{ duration: 0.2 }}
                 className="bg-brand-crema-light w-full max-w-5xl rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
             >
                 <div className="bg-gradient-to-r from-brand-green-dark to-brand-green p-6 text-brand-crema">
@@ -1829,17 +1779,20 @@ const AdminMenuManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             </motion.div>
 
             {/* Add Product Modal */}
+            <AnimatePresence>
             {showAddForm && (
                 <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
                     className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
                 >
                     <motion.div
                         initial={{ scale: 0.9, opacity: 0 }}
                         animate={{ scale: 1, opacity: 1 }}
                         exit={{ scale: 0.9, opacity: 0 }}
+                        transition={{ duration: 0.2 }}
                         className="bg-brand-crema-light w-full max-w-md rounded-2xl shadow-2xl overflow-hidden"
                     >
                         <div className="bg-gradient-to-r from-brand-green-dark to-brand-green p-6 text-brand-crema">
@@ -1924,9 +1877,11 @@ const AdminMenuManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                         </form>
                     </motion.div>
                 </motion.div>
-            )}
+                )}
+            </AnimatePresence>
 
             {/* Edit Product Modal */}
+            <AnimatePresence>
             {editingProduct && (
                 <EditProductModal
                     product={editingProduct}
@@ -1934,6 +1889,7 @@ const AdminMenuManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                     onUpdate={handleUpdateProduct}
                 />
             )}
+            </AnimatePresence>
         </motion.div>
     );
 };
@@ -1960,12 +1916,14 @@ const EditProductModal: React.FC<{ product: any; onClose: () => void; onUpdate: 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
             className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
         >
             <motion.div
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
+                transition={{ duration: 0.2 }}
                 className="bg-brand-crema-light w-full max-w-md rounded-2xl shadow-2xl overflow-hidden"
             >
                 <div className="bg-gradient-to-r from-brand-gold to-brand-gold-dark p-6 text-brand-green-dark">

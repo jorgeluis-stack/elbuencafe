@@ -356,13 +356,12 @@ export const ClientView: React.FC = () => {
 
       </main>
 
-      {/* ═══════════════ PRODUCT DETAIL MODAL ═══════════════ */}
-      {selectedProduct && (
-        <ProductDetailModal
-          product={selectedProduct}
-          onClose={() => setSelectedProduct(null)}
-        />
-      )}
+       {/* ═══════════════ PRODUCT DETAIL MODAL ═══════════════ */}
+      <ProductDetailModal
+        product={selectedProduct}
+        isOpen={!!selectedProduct}
+        onClose={() => setSelectedProduct(null)}
+      />
 
       {/* ═══════════════ BOTTOM NAVIGATION (MÓVIL) ═══════════════ */}
       <nav className="fixed bottom-0 inset-x-0 z-50 bg-[#0F1A0F]/95 backdrop-blur-xl border-t border-[#2A452A] px-6 py-3 flex items-center justify-around md:hidden shadow-2xl">

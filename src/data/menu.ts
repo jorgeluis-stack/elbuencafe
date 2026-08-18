@@ -13,6 +13,20 @@ export const CATEGORIES: { id: CategoryId; name: string; icon: string; descripti
   { id: 'postres', name: 'Postres', icon: '🍰', description: 'Flanes, crepas y pasteles', image: 'https://images.unsplash.com/photo-1551024506-0bccd828d307?w=600&auto=format&fit=crop&q=60' }
 ];
 
+// Acentos sutiles por categoría (terrosos, coherentes con la identidad café)
+export const CATEGORY_ACCENTS: Record<CategoryId, { dot: string; border: string; text: string }> = {
+  especiales: { dot: 'bg-brand-gold',          border: 'border-brand-gold/40',     text: 'text-brand-gold' },
+  bebidas:   { dot: 'bg-amber-500',             border: 'border-amber-700/40',      text: 'text-amber-400' },
+  desayunos: { dot: 'bg-yellow-500',           border: 'border-yellow-700/40',     text: 'text-yellow-400' },
+  antojitos: { dot: 'bg-orange-500',           border: 'border-orange-700/40',     text: 'text-orange-400' },
+  sopas:     { dot: 'bg-red-500',              border: 'border-red-700/40',        text: 'text-red-400' },
+  mariscos:  { dot: 'bg-teal-500',             border: 'border-teal-700/40',       text: 'text-teal-400' },
+  carnes:    { dot: 'bg-rose-500',             border: 'border-rose-700/40',       text: 'text-rose-400' },
+  paninos:   { dot: 'bg-amber-400',            border: 'border-amber-600/40',      text: 'text-amber-300' },
+  ensaladas: { dot: 'bg-lime-500',             border: 'border-lime-700/40',       text: 'text-lime-400' },
+  postres:   { dot: 'bg-pink-500',             border: 'border-pink-700/40',       text: 'text-pink-400' },
+};
+
 export const PRODUCTS: Product[] = [
   // Especiales / Destacados
   {

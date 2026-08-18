@@ -66,6 +66,20 @@ import {
 } from '../db/SupabaseQueries';
 import { supabase, isSupabaseConfigured } from '../db/supabaseClient';
 
+export type MetodoPago = 'efectivo' | 'electronico';
+
+export interface CobroResultado {
+    mesaNumero: string;
+    totalPagado: number;
+    cambio: number;
+    metodoPago: MetodoPago;
+    referencia?: string;
+    tipo: 'global' | 'asientos';
+    mesaLiberada: boolean;
+    pendientesRestantes: number;
+    asientosCobrados?: number[];
+}
+
 interface AccountContextType {
     // Estado de autenticación
     meseroLogueado: Mesero | null;
@@ -118,8 +132,8 @@ interface AccountContextType {
     devolverAMesero: (minicomandaId: number) => Promise<void>;
 
     // Funciones de cuenta
-    cobrarCuenta: (totalPagado: number, cambio: number, metodoPago: 'efectivo' | 'electronico', referencia?: string) => Promise<void>;
-    cobrarAsientos: (seatNumbers: number[], totalPagado: number, cambio: number, metodoPago: 'efectivo' | 'electronico', referencia?: string) => Promise<void>;
+    cobrarCuenta: (totalPagado: number, cambio: number, metodoPago: MetodoPago, referencia?: string) => Promise<CobroResultado | null>;
+    cobrarAsientos: (seatNumbers: number[], totalPagado: number, cambio: number, metodoPago: MetodoPago, referencia?: string) => Promise<CobroResultado | null>;
     resolverSalidaComensal: (itemId: number, asientoSale: number, decision: 'pasar' | 'repartir' | 'completa', destino?: number, asientosRestantes?: number[]) => Promise<void>;
     actualizarRepartoItem: (itemId: number, nuevosShares: { seat: number; porcentaje: number; monto: number }[]) => Promise<void>;
     obtenerSharesPorItem: (itemId: number) => Promise<any[]>;
@@ -1007,13 +1021,16 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
     };
 
     // Cobrar cuenta
-    const cobrarCuenta = async (totalPagado: number, cambio: number, metodoPago: 'efectivo' | 'electronico', referencia?: string) => {
+    const cobrarCuenta = async (totalPagado: number, cambio: number, metodoPago: MetodoPago, referencia?: string): Promise<CobroResultado | null> => {
         if (!mesaSeleccionada || !cuentaActual) {
             alert('Error: No hay cuenta activa');
-            return;
+            return null;
         }
 
         try {
+            // Capturar datos antes de limpiar el estado
+            const mesaNumero = mesaSeleccionada.numero;
+
             // Guardar referencia si se proporcionó
             if (referencia) {
                 await supabase.from('cuentas').update({ notas: `Ref: ${referencia}` }).eq('id', cuentaActual.id);
@@ -1047,8 +1064,16 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
                 setCuentaActivaIndex(0);
                 setCarroLocal((carroSiguiente as CarroItem[]) || []);
 
-                alert(`Cuenta cobrada con éxito.\nQuedan ${cuentasRestantes.length} cuenta(s) abierta(s) en esta mesa.`);
-                return;
+                return {
+                    mesaNumero,
+                    totalPagado,
+                    cambio,
+                    metodoPago,
+                    referencia,
+                    tipo: 'global',
+                    mesaLiberada: false,
+                    pendientesRestantes: cuentasRestantes.length
+                };
             }
 
             // No quedan cuentas → liberar mesa para nuevos clientes
@@ -1071,10 +1096,20 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             // Recargar mesas
             await cargarMesas();
 
-            alert('Cuenta cobrada con éxito');
+            return {
+                mesaNumero,
+                totalPagado,
+                cambio,
+                metodoPago,
+                referencia,
+                tipo: 'global',
+                mesaLiberada: true,
+                pendientesRestantes: 0
+            };
         } catch (error) {
             console.error('Error al cobrar cuenta:', error);
             alert('Error al cobrar cuenta');
+            return null;
         }
     };
 
@@ -1085,15 +1120,18 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
         seatNumbers: number[],
         totalPagado: number,
         cambio: number,
-        metodoPago: 'efectivo' | 'electronico',
+        metodoPago: MetodoPago,
         referencia?: string
-    ) => {
+    ): Promise<CobroResultado | null> => {
         if (!mesaSeleccionada || !cuentaActual || seatNumbers.length === 0) {
             alert('Error: No hay cuenta activa o asientos seleccionados');
-            return;
+            return null;
         }
 
         try {
+            // Capturar datos antes de limpiar el estado
+            const mesaNumero = mesaSeleccionada.numero;
+
             if (referencia) {
                 await supabase.from('cuentas').update({ notas: `Ref: ${referencia}` }).eq('id', cuentaActual.id);
             }
@@ -1180,9 +1218,19 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
                 setCarroLocal([]);
                 setCuentasAbiertas([]);
                 setCuentaActivaIndex(0);
+                setMesas(prev => prev.map(m => m.id === mesaSeleccionada.id ? { ...m, estado: 'LIBRE', mesero_activo_id: undefined } : m));
                 await cargarMesas();
-                alert('Cuenta cobrada con éxito');
-                return;
+                return {
+                    mesaNumero,
+                    totalPagado,
+                    cambio,
+                    metodoPago,
+                    referencia,
+                    tipo: 'asientos',
+                    asientosCobrados: seatNumbers,
+                    mesaLiberada: true,
+                    pendientesRestantes: 0
+                };
             }
 
             // La mesa sigue ocupada: dejar la primera cuenta restante como activa
@@ -1191,10 +1239,21 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             const minisSiguiente = await obtenerMinicomandasPorCuenta(siguiente.id);
             setMinicomandas(minisSiguiente);
             setCuentaActivaIndex(0);
-            alert(`Cobro realizado con éxito.\nQuedan ${cuentasRestantes.length} comensal(es) en la mesa.`);
+            return {
+                mesaNumero,
+                totalPagado,
+                cambio,
+                metodoPago,
+                referencia,
+                tipo: 'asientos',
+                asientosCobrados: seatNumbers,
+                mesaLiberada: false,
+                pendientesRestantes: cuentasRestantes.length
+            };
         } catch (error) {
             console.error('Error al cobrar asientos:', error);
             alert('Error al cobrar');
+            return null;
         }
     };
 
