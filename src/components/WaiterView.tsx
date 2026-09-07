@@ -2,9 +2,10 @@
 // Implementa: abrir cuenta → agregar productos → enviar a cocina → cobrar → liberar mesa
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { CATEGORIES, PRODUCTS, CATEGORY_ACCENTS } from '../data/menu';
+import { CATEGORIES, CATEGORY_ACCENTS } from '../data/menu';
 import { Product, CategoryId, CartItemOption, CarroItem, Extra } from '../types';
 import { useDeviceType } from '../hooks/useDeviceType';
+import { useProductos } from '../hooks/useProductos';
 import {
   Plus,
   Minus,
@@ -172,6 +173,9 @@ export const WaiterView: React.FC = () => {
   // Sheet de comanda en móvil (abre desde bottom bar)
   const [showMobileSheet, setShowMobileSheet] = useState(false);
 
+  // Catálogo vivo desde Supabase (fallback localStorage) — se actualiza con Realtime
+  const { productos } = useProductos();
+
   // Cargar items de cocina al montar el componente y al cambiar de mesa
   useEffect(() => {
     cargarItemsDeCocina();
@@ -209,7 +213,7 @@ export const WaiterView: React.FC = () => {
   const isAdminAccess = meseroLogueado && meseroLogueado.id === 0;
 
   // Filtrar productos por categoría y búsqueda
-  const filteredProducts = PRODUCTS.filter(product => {
+  const filteredProducts = productos.filter(product => {
     const matchesCategory = product.category === activeTab;
     const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (product.description && product.description.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -580,7 +584,7 @@ export const WaiterView: React.FC = () => {
       const itemsDevueltos = await obtenerItemsPorMinicomanda(mini.id);
       const nuevosItems: CarroItem[] = [];
       for (const it of itemsDevueltos) {
-        const producto = PRODUCTS.find(p => p.id === it.producto_id);
+        const producto = productos.find(p => p.id === it.producto_id);
         if (!producto) continue;
         const seatNumber = it.seat_number || 1;
         const localId = `devuelta-${Date.now()}-${Math.random().toString(36).substring(2, 8)}-${seatNumber}`;
@@ -716,11 +720,59 @@ export const WaiterView: React.FC = () => {
     </AnimatePresence>
   );
 
+  // JSX del modal de confirmación de reemplazo de mesero. Se renderiza en ambas
+  // vistas (selección y detalle): al tocar una mesa ocupada por otro mesero no se
+  // selecciona la mesa (mesaSeleccionada = null), así que la vista se queda en la
+  // grilla; si el modal solo existiera en la vista de detalle, no aparecería hasta
+  // tocar otra mesa, como ocurría antes.
+  const reemplazoModal = (
+    <AnimatePresence>
+      {solicitudReemplazo && (
+        <div id="reemplazo-mesero-modal" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            transition={{ duration: 0.2 }}
+            className="bg-white w-full max-w-sm rounded-3xl shadow-2xl overflow-hidden"
+          >
+            <div className="p-6 text-center">
+              <div className="w-16 h-16 mx-auto bg-amber-100 rounded-full flex items-center justify-center mb-4">
+                <AlertTriangle className="w-8 h-8 text-amber-600" />
+              </div>
+              <h3 className="text-lg font-black text-brand-green-dark mb-2">Mesa Ocupada</h3>
+              <p className="text-sm text-brand-warm-gray mb-6">
+                La mesa <span className="font-bold">{solicitudReemplazo.mesa.numero}</span> está siendo atendida por <span className="font-bold">{nombreMeseroActual}</span>.
+                <br /><br />
+                ¿Deseas tomar esta mesa y reemplazar al mesero actual?
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={cancelarReemplazo}
+                  className="flex-1 py-3 rounded-xl border border-brand-gold/30 text-brand-green-dark font-bold text-sm hover:bg-brand-crema transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={confirmarReemplazo}
+                  className="flex-1 py-3 rounded-xl bg-brand-gold text-brand-green-dark font-black text-sm hover:bg-brand-gold-light transition-colors"
+                >
+                  Tomar Mesa
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+
   // Renderizar selección de mesa
   if (!mesaSeleccionada) {
     return (
       <div id="waiter-view" className="min-h-screen bg-brand-green-dark p-4 flex flex-col">
         {cobroExitosoModal}
+        {reemplazoModal}
         {/* Header */}
         <div className="bg-gradient-to-r from-brand-gold to-brand-gold-dark p-4 text-brand-green-dark rounded-xl shadow-lg mb-4">
           <h2 className="text-2xl font-bold text-center">Seleccionar Mesa</h2>
@@ -1026,7 +1078,7 @@ export const WaiterView: React.FC = () => {
 
               {/* Items enviados a cocina (BD) — solo lectura con indicador de estado */}
               {itemsBDDelAsiento.map(itemBD => {
-                const nombreProd = PRODUCTS.find(p => p.id === itemBD.producto_id)?.name || itemBD.producto_id;
+                const nombreProd = productos.find(p => p.id === itemBD.producto_id)?.name || itemBD.producto_id;
                 const estado = itemBD.estado_minicomanda || 'PENDIENTE';
                 const esListo = estado === 'LISTO';
                 const esDevuelto = estado === 'DEVUELTA';
@@ -1275,12 +1327,7 @@ export const WaiterView: React.FC = () => {
                     )}
                   </div>
 
-                  {/* En móvil: icono/placeholder sutil */}
-                  {!product.image && (
-                    <div className="md:hidden h-16 bg-gradient-to-br from-brand-crema to-brand-crema-dark/30 flex items-center justify-center text-2xl">
-                      ☕
-                    </div>
-                  )}
+                  {/* En móvil: sin placeholder (consistente con ClientView - todos sin imagen en smartphone) */}
 
                   {/* Product info */}
                   <div className="p-3 flex flex-col justify-between flex-1">
@@ -1383,46 +1430,8 @@ export const WaiterView: React.FC = () => {
         </>
       )}
 
-      {/* Modal de confirmación de reemplazo de mesero */}
-      <AnimatePresence>
-      {solicitudReemplazo && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.9 }}
-            transition={{ duration: 0.2 }}
-            className="bg-white w-full max-w-sm rounded-3xl shadow-2xl overflow-hidden"
-          >
-            <div className="p-6 text-center">
-              <div className="w-16 h-16 mx-auto bg-amber-100 rounded-full flex items-center justify-center mb-4">
-                <AlertTriangle className="w-8 h-8 text-amber-600" />
-              </div>
-              <h3 className="text-lg font-black text-brand-green-dark mb-2">Mesa Ocupada</h3>
-              <p className="text-sm text-brand-warm-gray mb-6">
-                La mesa <span className="font-bold">{solicitudReemplazo.mesa.numero}</span> está siendo atendida por <span className="font-bold">{nombreMeseroActual}</span>.
-                <br /><br />
-                ¿Deseas tomar esta mesa y reemplazar al mesero actual?
-              </p>
-              <div className="flex gap-3">
-                <button
-                  onClick={cancelarReemplazo}
-                  className="flex-1 py-3 rounded-xl border border-brand-gold/30 text-brand-green-dark font-bold text-sm hover:bg-brand-crema transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={confirmarReemplazo}
-                  className="flex-1 py-3 rounded-xl bg-brand-gold text-brand-green-dark font-black text-sm hover:bg-brand-gold-light transition-colors"
-                >
-                  Tomar Mesa
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        </div>
-        )}
-      </AnimatePresence>
+      {/* Modal de confirmación de reemplazo de mesero (compartido con la vista de selección) */}
+      {reemplazoModal}
 
       {/* Diálogo: Comanda enviada a cocina */}
       <AnimatePresence>
@@ -1648,7 +1657,7 @@ export const WaiterView: React.FC = () => {
                                   ) : (
                                     <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                                       {itemsDelComensal.map((it: any, idx: number) => {
-                                        const nombreProd = PRODUCTS.find(p => p.id === it.producto_id)?.name || it.producto_id;
+                                        const nombreProd = productos.find(p => p.id === it.producto_id)?.name || it.producto_id;
                                         return (
                                           <div
                                             key={it.id || idx}

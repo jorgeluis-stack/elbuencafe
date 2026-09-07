@@ -25,7 +25,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ product,
           >
             <X className="w-5 h-5" />
           </button>
-          <div className="relative h-64 sm:h-56 bg-[#0F1A0F] overflow-hidden">
+          {/* Encabezado con imagen — solo tableta/desktop (mismo breakpoint que la grilla) */}
+          <div className={`relative h-64 sm:h-56 bg-[#0F1A0F] overflow-hidden ${product.image ? 'hidden md:block' : ''}`}>
             {product.image ? (
               <img src={product.image} alt={product.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
             ) : (
@@ -40,6 +41,13 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({ product,
               <h2 className="text-2xl font-display font-bold tracking-tight mt-2">{product.name}</h2>
             </div>
           </div>
+          {/* Móvil: encabezado compacto sin imagen (consistente con la grilla) */}
+          {product.image && (
+            <div className="md:hidden px-5 pt-5">
+              <span className="bg-brand-gold text-[#0F1A0F] text-[9px] font-bold px-2 py-1 rounded-full uppercase tracking-wider">{product.category}</span>
+              <h2 className="text-2xl font-display font-bold tracking-tight text-white mt-2">{product.name}</h2>
+            </div>
+          )}
           <div className="p-5 flex-1 space-y-5">
             {product.description && (
               <p className="text-[#B8C4B8] text-sm leading-relaxed font-display italic text-base">{product.description}</p>

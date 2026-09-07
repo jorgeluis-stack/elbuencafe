@@ -205,6 +205,19 @@ export const obtenerTodasLasCuentas = async (): Promise<Cuenta[]> => {
     return data as Cuenta[];
 };
 
+// Todas las cuentas ABIERTA (fuente de verdad de ocupación de mesas).
+// Filtrado en BD para no traer el histórico completo → mucho más rápido.
+export const obtenerCuentasAbiertas = async (): Promise<Cuenta[]> => {
+    const { data, error } = await supabase
+        .from('cuentas')
+        .select('*')
+        .eq('estado', 'ABIERTA')
+        .order('fecha_apertura', { ascending: false });
+
+    if (error) throw new Error(`Error al obtener cuentas abiertas: ${error.message}`);
+    return data as Cuenta[];
+};
+
 export const obtenerCuentaPorId = async (id: number): Promise<Cuenta | undefined> => {
     const { data, error } = await supabase
         .from('cuentas')
@@ -819,6 +832,167 @@ export const obtenerProductos = async (): Promise<Producto[]> => {
     const { PRODUCTS } = await import('../data/menu');
     localStorage.setItem('elbuencafe_products', JSON.stringify(PRODUCTS));
     return PRODUCTS as Producto[];
+};
+
+// ============================================================================
+// CATÁLOGO DE PRODUCTOS (platillos) — tabla `productos` en Supabase
+// Fuente de datos viva: los cambios del admin se reflejan en todos los
+// dispositivos vía Realtime. Si Supabase no está configurado, degrada a
+// localStorage (elbuencafe_products) como fallback.
+// ============================================================================
+
+/** Convierte una fila de la tabla `productos` al tipo Producto de la app. */
+const filaAProducto = (f: any): Producto => ({
+    id: f.clave,
+    name: f.nombre,
+    description: f.descripcion ?? undefined,
+    price: Number(f.precio),
+    category: f.categoria,
+    popular: f.popular ?? false,
+    image: f.imagen_url ?? undefined,
+    options: Array.isArray(f.opciones) && f.opciones.length > 0 ? f.opciones : undefined,
+    calories: f.calorias ?? undefined,
+    prepTime: f.tiempo_prep ?? undefined,
+    spicy: f.picante ?? false,
+    vegetarian: f.vegetariano ?? false,
+    activo: f.activo ?? true
+});
+
+/** Convierte un Producto de la app a una fila de la tabla `productos`. */
+const productoAFila = (p: Producto): any => ({
+    clave: p.id,
+    nombre: p.name,
+    descripcion: p.description ?? null,
+    precio: p.price,
+    categoria: p.category,
+    popular: p.popular ?? false,
+    imagen_url: p.image ?? null,
+    opciones: p.options ?? [],
+    calorias: p.calories ?? null,
+    tiempo_prep: p.prepTime ?? null,
+    picante: p.spicy ?? false,
+    vegetariano: p.vegetarian ?? false,
+    activo: p.activo ?? true
+});
+
+/** Sembrar la tabla `productos` con el catálogo actual de menu.ts (solo la primera vez). */
+const sembrarProductos = async (): Promise<void> => {
+    const yaSembrado = localStorage.getItem('elbuencafe_productos_sembrado') === '1';
+    if (yaSembrado) return;
+
+    const { PRODUCTS } = await import('../data/menu');
+    const filas = PRODUCTS.map(productoAFila);
+    const { error } = await supabase.from('productos').insert(filas);
+    if (error) {
+        console.error('Error al sembrar productos:', error.message);
+        return;
+    }
+    localStorage.setItem('elbuencafe_productos_sembrado', '1');
+};
+
+/**
+ * Listar el catálogo de platillos.
+ * - Con Supabase: lee la tabla `productos`; si está vacía, la siembra con menu.ts.
+ * - Sin Supabase: lee localStorage (elbuencafe_products) o menu.ts.
+ */
+export const listarProductos = async (): Promise<Producto[]> => {
+    if (!isSupabaseConfigured()) {
+        const savedProducts = localStorage.getItem('elbuencafe_products');
+        if (savedProducts) {
+            return JSON.parse(savedProducts) as Producto[];
+        }
+        const { PRODUCTS } = await import('../data/menu');
+        localStorage.setItem('elbuencafe_products', JSON.stringify(PRODUCTS));
+        return PRODUCTS as Producto[];
+    }
+
+    const { data, error } = await supabase
+        .from('productos')
+        .select('*')
+        .order('nombre', { ascending: true });
+
+    if (error) throw new Error(`Error al obtener productos: ${error.message}`);
+
+    if (!data || data.length === 0) {
+        await sembrarProductos();
+        const { data: dataSembrada, error: errorSembrada } = await supabase
+            .from('productos')
+            .select('*')
+            .order('nombre', { ascending: true });
+        if (errorSembrada) throw new Error(`Error al obtener productos: ${errorSembrada.message}`);
+        return (dataSembrada || []).map(filaAProducto);
+    }
+
+    return data.map(filaAProducto);
+};
+
+/** Crear un nuevo platillo en el catálogo. */
+export const crearProducto = async (producto: Producto): Promise<Producto> => {
+    const fila = productoAFila(producto);
+    const { data, error } = await supabase
+        .from('productos')
+        .insert(fila)
+        .select()
+        .single();
+
+    if (error) throw new Error(`Error al crear producto: ${error.message}`);
+    return filaAProducto(data);
+};
+
+/** Actualizar un platillo existente (por su clave/id). Solo toca los campos presentes en `cambios`. */
+export const actualizarProducto = async (clave: string, cambios: Partial<Producto>): Promise<void> => {
+    const fila: any = { updated_at: new Date().toISOString() };
+    if (cambios.name !== undefined) fila.nombre = cambios.name;
+    if (cambios.description !== undefined) fila.descripcion = cambios.description ?? null;
+    if (cambios.price !== undefined) fila.precio = cambios.price;
+    if (cambios.category !== undefined) fila.categoria = cambios.category;
+    if (cambios.popular !== undefined) fila.popular = cambios.popular;
+    if (cambios.image !== undefined) fila.imagen_url = cambios.image ?? null;
+    if (cambios.options !== undefined) fila.opciones = cambios.options ?? [];
+    if (cambios.calories !== undefined) fila.calorias = cambios.calories ?? null;
+    if (cambios.prepTime !== undefined) fila.tiempo_prep = cambios.prepTime ?? null;
+    if (cambios.spicy !== undefined) fila.picante = cambios.spicy;
+    if (cambios.vegetarian !== undefined) fila.vegetariano = cambios.vegetarian;
+    if (cambios.activo !== undefined) fila.activo = cambios.activo;
+
+    const { error } = await supabase
+        .from('productos')
+        .update(fila)
+        .eq('clave', clave);
+
+    if (error) throw new Error(`Error al actualizar producto: ${error.message}`);
+};
+
+/** Eliminar un platillo del catálogo (por su clave/id). */
+export const eliminarProducto = async (clave: string): Promise<void> => {
+    const { error } = await supabase
+        .from('productos')
+        .delete()
+        .eq('clave', clave);
+
+    if (error) throw new Error(`Error al eliminar producto: ${error.message}`);
+};
+
+/**
+ * Subir una imagen de platillo al bucket público `platillos`.
+ * Retorna la URL pública para guardar en el campo imagen.
+ */
+export const subirImagenProducto = async (file: File): Promise<string> => {
+    if (!isSupabaseConfigured()) {
+        throw new Error('Supabase no configurado: no se pueden subir imágenes. Usa una URL.');
+    }
+
+    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const ruta = `productos/${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${ext}`;
+
+    const { error } = await supabase.storage
+        .from('platillos')
+        .upload(ruta, file, { upsert: false, contentType: file.type });
+
+    if (error) throw new Error(`Error al subir imagen: ${error.message}`);
+
+    const { data } = supabase.storage.from('platillos').getPublicUrl(ruta);
+    return data.publicUrl;
 };
 
 // ============================================================================

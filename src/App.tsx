@@ -9,11 +9,18 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { KitchenView } from './components/KitchenView';
 import { RoleAccessModal } from './components/RoleAccessModal';
 import { NotificationToast } from './components/NotificationToast';
+import { SplashScreen } from './components/SplashScreen';
 
 const AppContent: React.FC = () => {
   const { currentRole, setCurrentRole, users } = useOrders();
   const { loginCocina, loginCocinaAsAdmin, loginMesero, loginMeseroAsAdmin } = useAccount();
   const [showSectionModal, setShowSectionModal] = useState(false);
+  const [showSplash, setShowSplash] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setShowSplash(false), 3000);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     const openModal = () => setShowSectionModal(true);
@@ -65,7 +72,9 @@ const AppContent: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-brand-green-dark flex flex-col font-sans">
+    <>
+      <SplashScreen isVisible={showSplash} />
+      <div className="min-h-screen bg-brand-green-dark flex flex-col font-sans">
       {/* Navigation bar */}
       <nav id="role-navigator" className="bg-brand-green-dark/95 backdrop-blur-xl border-b border-brand-gold/15 text-brand-crema sticky top-0 z-50 px-4 py-3 shadow-2xl select-none">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
@@ -105,6 +114,7 @@ const AppContent: React.FC = () => {
       {/* Notification toast */}
       <NotificationToast />
     </div>
+    </>
   );
 };
 

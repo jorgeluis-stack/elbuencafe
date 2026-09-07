@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useOrders } from '../context/OrderContext';
-import { CATEGORIES, PRODUCTS } from '../data/menu';
-import { Product, CategoryId } from '../types';
+import { CATEGORIES } from '../data/menu';
+import { CategoryId } from '../types';
+import { useProductos } from '../hooks/useProductos';
 import { ProductDetailModal } from './ProductDetailModal';
 import {
   Search,
@@ -26,7 +27,10 @@ export const ClientView: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<CategoryId>('especiales');
   const [searchQuery, setSearchQuery] = useState('');
 
-  const filteredProducts = PRODUCTS.filter(product => {
+  // Catálogo vivo desde Supabase (fallback localStorage) — se actualiza con Realtime
+  const { productos } = useProductos();
+
+  const filteredProducts = productos.filter(product => {
     const matchesCategory = product.category === activeCategory;
     const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (product.description && product.description.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -279,19 +283,15 @@ export const ClientView: React.FC = () => {
                       className="bg-[#1A2E1A] rounded-3xl overflow-hidden border border-[#2A452A] hover:border-brand-gold/60 hover:shadow-2xl hover:shadow-brand-gold/10 hover:-translate-y-1 transition-all duration-300 flex flex-col justify-between cursor-pointer group"
                       onClick={() => setSelectedProduct(product)}
                     >
-                      {/* Product image container */}
-                      <div className="w-full h-52 sm:h-56 bg-[#0F1A0F] overflow-hidden relative">
-                        {product.image ? (
+                      {/* Product image container - solo tableta/desktop (reutiliza patrón WaiterView.tsx:1259) */}
+                      <div className={`w-full h-52 sm:h-56 bg-[#0F1A0F] overflow-hidden relative ${product.image ? 'hidden md:block' : 'hidden'}`}>
+                        {product.image && (
                           <img
                             src={product.image}
                             alt={product.name}
                             className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
                             referrerPolicy="no-referrer"
                           />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-4xl bg-gradient-to-br from-[#243D24] to-[#1A2E1A]">
-                            ☕
-                          </div>
                         )}
                         <div className="absolute inset-0 bg-gradient-to-t from-[#1A2E1A] via-transparent to-transparent opacity-80" />
 
@@ -304,13 +304,22 @@ export const ClientView: React.FC = () => {
                           )}
                         </div>
 
-                        {/* Price tag overlay */}
+                        {/* Price tag overlay - desktop */}
                         <div className="absolute bottom-3 right-3 bg-[#0F1A0F]/90 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-brand-gold/40 shadow-xl">
                           <span className="font-display font-extrabold text-brand-gold text-lg">
                             ${product.price.toFixed(2)}
                           </span>
                         </div>
                       </div>
+                      {/* En móvil: sin placeholder (todos los platillos sin imagen en smartphone, consistente) */}
+                      {/* Precio visible en móvil cuando la imagen está oculta */}
+                      {product.image && (
+                        <div className="md:hidden px-5 pt-3 flex justify-end">
+                          <span className="bg-[#0F1A0F]/90 backdrop-blur-md px-3 py-1 rounded-xl border border-brand-gold/40 text-brand-gold font-display font-extrabold text-base">
+                            ${product.price.toFixed(2)}
+                          </span>
+                        </div>
+                      )}
 
                       {/* Content info */}
                       <div className="p-5 flex-1 flex flex-col justify-between space-y-4">

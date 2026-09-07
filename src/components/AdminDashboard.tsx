@@ -5,14 +5,18 @@ import {
     actualizarMesero,
     obtenerMeseroPorUsername,
     sincronizarMesasConfiguradas,
-    obtenerCuentasCobradasEnFecha,
     obtenerMinicomandasConItemsPorCuentas,
     obtenerTodosLosMeseros,
     obtenerTodosLosExtras,
     agregarExtra,
     actualizarExtra,
-    eliminarExtra
+    eliminarExtra,
+    crearProducto,
+    actualizarProducto,
+    eliminarProducto,
+    subirImagenProducto
 } from '../db/SupabaseQueries';
+import { useProductos } from '../hooks/useProductos';
 import { supabase, isSupabaseConfigured } from '../db/supabaseClient';
 import {
     DollarSign,
@@ -36,7 +40,8 @@ import {
     User,
     Archive,
     RotateCcw,
-    Printer
+    Printer,
+    Upload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { imprimirTicketReparto } from '../utils/printer';
@@ -67,10 +72,40 @@ interface UserCredentials {
     roles: string; // Roles separados por coma: "admin,mesero,cocina,repartidor"
 }
 
+// Si está en false, se oculta toda la interfaz de pedidos a domicilio sin borrar el código.
+const MODULO_DELIVERY_VISIBLE = false;
+
+// Utilidades de fecha en zona horaria de CDMX (UTC-6)
+const obtenerFechaLocalYYYYMMDD = (): string => {
+    const ahora = new Date();
+    return `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}-${String(ahora.getDate()).padStart(2, '0')}`;
+};
+
+const parsearFechaLocal = (fecha: string): Date => {
+    const [y, m, d] = fecha.split('-').map(Number);
+    return new Date(y, m - 1, d, 0, 0, 0, 0);
+};
+
+const formatearFechaLocal = (fecha: string): string =>
+    parsearFechaLocal(fecha).toLocaleDateString('es-MX', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+    });
+
+// Rango 00:00–24:00 del día en CDMX (UTC-6) expresado como instantes UTC
+const obtenerRangoDiaUTC = (fecha: string): { inicio: string; fin: string } => {
+    const [y, m, d] = fecha.split('-').map(Number);
+    const inicio = new Date(Date.UTC(y, m - 1, d, 6, 0, 0, 0));
+    const fin = new Date(Date.UTC(y, m - 1, d + 1, 6, 0, 0, 0));
+    return { inicio: inicio.toISOString(), fin: fin.toISOString() };
+};
+
 export const AdminDashboard: React.FC = () => {
     const { orders, currentRole, setCurrentRole, users, saveUser, deleteUser, addNotification, resetOrders, markOrderAsPaid, updateAdminCredentials } = useOrders();
     const [employeeNombre, setEmployeeNombre] = useState('');
-    const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+    const [selectedDate, setSelectedDate] = useState<string>(obtenerFechaLocalYYYYMMDD());
     const [showMenuManager, setShowMenuManager] = useState(false);
     const [orderFilter, setOrderFilter] = useState<'todos' | 'online' | 'local'>('todos');
     const prevOrdersCount = useRef(orders.length);
@@ -161,8 +196,7 @@ export const AdminDashboard: React.FC = () => {
             }
             setLocalSalesLoading(true);
             try {
-                const fechaInicio = `${selectedDate}T00:00:00.000Z`;
-                const fechaFin = `${selectedDate}T23:59:59.999Z`;
+                const { inicio: fechaInicio, fin: fechaFin } = obtenerRangoDiaUTC(selectedDate);
 
                 const { data: cuentas } = await supabase
                     .from('cuentas')
@@ -189,6 +223,9 @@ export const AdminDashboard: React.FC = () => {
                         }))
                     );
 
+                    // Respaldo: si la cuenta no guardó total, se calcula desde sus ítems
+                    const totalDesdeItems = items.reduce((sum: number, item: any) => sum + (item.product.price || 0) * (item.quantity || 0), 0);
+
                     let status: 'pendiente' | 'listo' | 'entregado' | 'cobrado';
                     if (cuenta.estado === 'COBRADA') {
                         status = 'cobrado';
@@ -210,7 +247,7 @@ export const AdminDashboard: React.FC = () => {
                         items,
                         status,
                         createdAt: cuenta.fecha_apertura,
-                        total: cuenta.total_pagado || cuenta.total_acumulado || 0,
+                        total: cuenta.total_pagado || cuenta.total_acumulado || totalDesdeItems,
                         paymentMethod: cuenta.metodo_pago || 'efectivo',
                         paid: cuenta.estado === 'COBRADA',
                         paymentDate: cuenta.fecha_cierre
@@ -242,7 +279,7 @@ export const AdminDashboard: React.FC = () => {
         });
     };
 
-    const onlineDailyOrders = getOrdersByDate(selectedDate);
+    const onlineDailyOrders = MODULO_DELIVERY_VISIBLE ? getOrdersByDate(selectedDate) : [];
     const dailyOrders = [...onlineDailyOrders, ...localSales];
 
     // Filter only paid orders for reconciliation
@@ -288,7 +325,7 @@ Generado: ${new Date().toLocaleString('es-MX')}
 📊 RESUMEN DE VENTAS
 ───────────────────────────────────────────────────────────────
 Total de Ventas:      $${dailyStats.total.toFixed(2)}
-Cantidad de Pedidos:  ${dailyStats.count}
+Cantidad de Ventas:  ${dailyStats.count}
 ───────────────────────────────────────────────────────────────
 
 💰 MÉTODO DE PAGO
@@ -313,7 +350,7 @@ Diferencia:           $${difference.toFixed(2)}
             const paymentIcon = paymentMethod === 'efectivo' ? '💵' : '💳';
 
             report += `
-Pedido #${order.orderNumber} - ${paymentIcon} ${paymentMethod.toUpperCase()}
+Venta #${order.orderNumber} - ${paymentIcon} ${paymentMethod.toUpperCase()}
 Tipo: ${order.type === 'local' ? 'Mesa ' + (order.tableNumber || 'N/A') : 'Domicilio'}
 Cliente: ${order.customerName || order.waiterName || 'N/A'}
 Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
@@ -448,7 +485,7 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                 <ShoppingBag className="w-6 h-6 text-brand-green" />
                             </div>
                             <div>
-                                <p className="text-xs text-brand-warm-gray/60 uppercase font-bold">Pedidos</p>
+                                <p className="text-xs text-brand-warm-gray/60 uppercase font-bold">Cuentas</p>
                                 <p className="text-2xl font-bold text-brand-green-dark">{dailyStats.count}</p>
                             </div>
                         </div>
@@ -619,13 +656,14 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                         <div className="flex items-center justify-between mb-3">
                             <h3 className="text-lg font-bold text-brand-green-dark flex items-center gap-2">
                                 <Clock className="w-5 h-5 text-brand-gold" />
-                                Pedidos del Día ({dailyOrders.length})
+                                Ventas del Día ({dailyOrders.length})
                             </h3>
                             <span className="text-xs text-brand-warm-gray/60 uppercase font-bold">
                                 Ventas Contabilizadas: {paidOrders.length}
                             </span>
                         </div>
-                        {/* Filtros */}
+                        {/* Filtros (visibles solo con módulo de delivery activo) */}
+                        {MODULO_DELIVERY_VISIBLE && (
                         <div className="flex gap-2">
                             {(['todos', 'online', 'local'] as const).map(f => (
                                 <button
@@ -640,6 +678,7 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                 </button>
                             ))}
                         </div>
+                        )}
                     </div>
                     <div className="max-h-96 overflow-y-auto">
                         {(() => {
@@ -651,7 +690,7 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                             return filtered.length === 0 ? (
                                 <div className="p-12 text-center text-brand-warm-gray/50">
                                     <ShoppingBag className="w-16 h-16 mx-auto mb-4 opacity-20" />
-                                    <p>No hay pedidos registrados para esta fecha</p>
+                                    <p>No hay ventas registradas para esta fecha</p>
                                 </div>
                             ) : filtered.map((order) => {
                                 const paymentMethod = order.paymentMethod || 'efectivo';
@@ -669,7 +708,7 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                                     #{order.orderNumber}
                                                 </span>
                                                 <span className="text-xs text-brand-warm-gray/60 uppercase font-bold">
-                                                    {order.type === 'local' ? 'Mesa ' + (order.tableNumber || 'N/A') : 'Domicilio'}
+                                                    {MODULO_DELIVERY_VISIBLE && order.type === 'domicilio' ? 'Domicilio' : 'Mesa ' + (order.tableNumber || 'N/A')}
                                                 </span>
                                             </div>
                                             <div className="flex items-center gap-2">
@@ -694,7 +733,7 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                                         Checkout
                                                     </button>
                                                 )}
-                                                {order.type === 'domicilio' && (
+                                                {MODULO_DELIVERY_VISIBLE && order.type === 'domicilio' && (
                                                     <button
                                                         onClick={() => {
                                                             imprimirTicketReparto({
@@ -765,7 +804,7 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
 
                         <div className="p-6">
                             <div className="text-center mb-6">
-                                <p className="text-sm text-brand-warm-gray/60">Fecha: {new Date(selectedDate).toLocaleDateString('es-MX', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                                <p className="text-sm text-brand-warm-gray/60">Fecha: {formatearFechaLocal(selectedDate)}</p>
                                 <p className="text-sm text-brand-warm-gray/60">Generado: {new Date().toLocaleString('es-MX')}</p>
                             </div>
 
@@ -778,7 +817,7 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                             <p className="text-xl font-bold text-brand-green-dark">${dailyStats.total.toFixed(2)}</p>
                                         </div>
                                         <div>
-                                            <p className="text-xs text-brand-warm-gray/50">Pedidos</p>
+                                            <p className="text-xs text-brand-warm-gray/50">Cuentas</p>
                                             <p className="text-xl font-bold text-brand-green-dark">{dailyStats.count}</p>
                                         </div>
                                     </div>
@@ -1627,64 +1666,50 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
 
 // Separate component for menu management
 const AdminMenuManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
-    const [products, setProducts] = useState<any[]>([]);
+    const { productos, loading, refresh } = useProductos();
     const [showAddForm, setShowAddForm] = useState(false);
     const [editingProduct, setEditingProduct] = useState<any>(null);
     const [searchQuery, setSearchQuery] = useState('');
+    const [saving, setSaving] = useState(false);
 
-    // Load products from localStorage
-    useEffect(() => {
-        const savedProducts = localStorage.getItem('elbuencafe_products');
-        if (savedProducts) {
-            setProducts(JSON.parse(savedProducts));
-        } else {
-            // Load default products
-            import('../data/menu').then(({ PRODUCTS }) => {
-                setProducts(PRODUCTS);
-                localStorage.setItem('elbuencafe_products', JSON.stringify(PRODUCTS));
-            });
+    const handleAddProduct = async (nuevo: any) => {
+        setSaving(true);
+        try {
+            await crearProducto(nuevo);
+            await refresh();
+            setShowAddForm(false);
+        } catch (error) {
+            alert('Error al agregar platillo: ' + (error as Error).message);
+        } finally {
+            setSaving(false);
         }
-    }, []);
-
-    const handleAddProduct = (e: React.FormEvent) => {
-        e.preventDefault();
-        const form = e.target as HTMLFormElement;
-        const formData = new FormData(form);
-
-        const newProduct = {
-            id: formData.get('id') as string,
-            name: formData.get('name') as string,
-            description: formData.get('description') as string,
-            price: parseFloat(formData.get('price') as string),
-            category: formData.get('category') as string,
-            image: formData.get('image') as string,
-            options: []
-        };
-
-        const updatedProducts = [...products, newProduct];
-        setProducts(updatedProducts);
-        localStorage.setItem('elbuencafe_products', JSON.stringify(updatedProducts));
-        setShowAddForm(false);
     };
 
-    const handleDeleteProduct = (id: string) => {
+    const handleDeleteProduct = async (id: string) => {
         if (confirm('¿Estás seguro de eliminar este platillo?')) {
-            const updatedProducts = products.filter(p => p.id !== id);
-            setProducts(updatedProducts);
-            localStorage.setItem('elbuencafe_products', JSON.stringify(updatedProducts));
+            try {
+                await eliminarProducto(id);
+                await refresh();
+            } catch (error) {
+                alert('Error al eliminar platillo: ' + (error as Error).message);
+            }
         }
     };
 
-    const handleUpdateProduct = (id: string, updates: Partial<any>) => {
-        const updatedProducts = products.map(p =>
-            p.id === id ? { ...p, ...updates } : p
-        );
-        setProducts(updatedProducts);
-        localStorage.setItem('elbuencafe_products', JSON.stringify(updatedProducts));
-        setEditingProduct(null);
+    const handleUpdateProduct = async (id: string, updates: Partial<any>) => {
+        setSaving(true);
+        try {
+            await actualizarProducto(id, updates);
+            await refresh();
+            setEditingProduct(null);
+        } catch (error) {
+            alert('Error al actualizar platillo: ' + (error as Error).message);
+        } finally {
+            setSaving(false);
+        }
     };
 
-    const filteredProducts = products.filter(p =>
+    const filteredProducts = productos.filter(p =>
         p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         p.category.toLowerCase().includes(searchQuery.toLowerCase())
     );
@@ -1736,6 +1761,12 @@ const AdminMenuManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                     </div>
 
                     {/* Products Grid */}
+                    {loading && productos.length === 0 ? (
+                        <div className="text-center py-16 text-brand-warm-gray/50">
+                            <ImageIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                            <p className="text-sm font-bold">Cargando menú...</p>
+                        </div>
+                    ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                         {filteredProducts.map(product => (
                             <div key={product.id} className="bg-white rounded-xl shadow-md overflow-hidden border border-brand-gold/10">
@@ -1751,7 +1782,7 @@ const AdminMenuManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                                 <div className="p-4">
                                     <div className="flex items-center justify-between mb-2">
                                         <span className="text-xs font-bold text-brand-gold uppercase">{product.category}</span>
-                                        <span className="text-sm font-bold text-brand-green-dark">${product.price.toFixed(2)}</span>
+                                        <span className="text-sm font-bold text-brand-green-dark">${Number(product.price).toFixed(2)}</span>
                                     </div>
                                     <h3 className="font-bold text-brand-green-dark mb-2">{product.name}</h3>
                                     {product.description && (
@@ -1775,109 +1806,19 @@ const AdminMenuManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                             </div>
                         ))}
                     </div>
+                    )}
                 </div>
             </motion.div>
 
             {/* Add Product Modal */}
             <AnimatePresence>
             {showAddForm && (
-                <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-                >
-                    <motion.div
-                        initial={{ scale: 0.9, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        exit={{ scale: 0.9, opacity: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className="bg-brand-crema-light w-full max-w-md rounded-2xl shadow-2xl overflow-hidden"
-                    >
-                        <div className="bg-gradient-to-r from-brand-green-dark to-brand-green p-6 text-brand-crema">
-                            <h3 className="text-lg font-bold">Agregar Nuevo Platillo</h3>
-                        </div>
-                        <form onSubmit={handleAddProduct} className="p-6 space-y-4">
-                            <div>
-                                <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">ID</label>
-                                <input
-                                    name="id"
-                                    required
-                                    className="w-full bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
-                                />
-                            </div>
-                            <div>
-                                <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">Nombre</label>
-                                <input
-                                    name="name"
-                                    required
-                                    className="w-full bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
-                                />
-                            </div>
-                            <div>
-                                <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">Descripción</label>
-                                <textarea
-                                    name="description"
-                                    rows={2}
-                                    className="w-full bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
-                                />
-                            </div>
-                            <div>
-                                <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">Precio</label>
-                                <input
-                                    name="price"
-                                    type="number"
-                                    step="0.01"
-                                    required
-                                    className="w-full bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
-                                />
-                            </div>
-                            <div>
-                                <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">Categoría</label>
-                                <select
-                                    name="category"
-                                    className="w-full bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
-                                >
-                                    <option value="especiales">Destacados</option>
-                                    <option value="bebidas">Bebidas</option>
-                                    <option value="desayunos">Desayunos</option>
-                                    <option value="antojitos">Antojitos</option>
-                                    <option value="sopas">Sopas</option>
-                                    <option value="mariscos">Mariscos</option>
-                                    <option value="carnes">Carnes y Pollo</option>
-                                    <option value="paninos">Paninos</option>
-                                    <option value="ensaladas">Ensaladas</option>
-                                    <option value="postres">Postres</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">URL de la Imagen</label>
-                                <input
-                                    name="image"
-                                    className="w-full bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
-                                    placeholder="https://..."
-                                />
-                            </div>
-                            <div className="flex gap-3 mt-6">
-                                <button
-                                    type="button"
-                                    onClick={() => setShowAddForm(false)}
-                                    className="flex-1 bg-brand-crema-dark text-brand-warm-gray font-bold py-2 rounded-lg hover:bg-brand-crema"
-                                >
-                                    Cancelar
-                                </button>
-                                <button
-                                    type="submit"
-                                    className="flex-1 bg-gradient-to-r from-brand-gold to-brand-gold-dark text-brand-green-dark font-bold py-2 rounded-lg"
-                                >
-                                    Guardar
-                                </button>
-                            </div>
-                        </form>
-                    </motion.div>
-                </motion.div>
-                )}
+                <NuevoProductoModal
+                    onClose={() => setShowAddForm(false)}
+                    onSave={handleAddProduct}
+                    saving={saving}
+                />
+            )}
             </AnimatePresence>
 
             {/* Edit Product Modal */}
@@ -1887,6 +1828,7 @@ const AdminMenuManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                     product={editingProduct}
                     onClose={() => setEditingProduct(null)}
                     onUpdate={handleUpdateProduct}
+                    saving={saving}
                 />
             )}
             </AnimatePresence>
@@ -1894,20 +1836,204 @@ const AdminMenuManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     );
 };
 
+// Campo de imagen híbrido: pegar URL de internet o subir archivo (cámara/galería)
+const ImagenProductoField: React.FC<{ value: string; onChange: (v: string) => void }> = ({ value, onChange }) => {
+    const [uploading, setUploading] = useState(false);
+    const fileRef = useRef<HTMLInputElement>(null);
+
+    const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setUploading(true);
+        try {
+            const url = await subirImagenProducto(file);
+            onChange(url);
+        } catch (error) {
+            alert('Error al subir imagen: ' + (error as Error).message);
+        } finally {
+            setUploading(false);
+            if (fileRef.current) fileRef.current.value = '';
+        }
+    };
+
+    return (
+        <div className="space-y-2">
+            <div className="flex gap-2">
+                <input
+                    type="text"
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                    placeholder="https://..."
+                    className="flex-1 bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
+                />
+                <button
+                    type="button"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={uploading}
+                    className="bg-brand-green text-brand-crema hover:bg-brand-green-dark font-bold px-3 py-2 rounded-lg text-xs flex items-center gap-1.5 disabled:opacity-50 transition-colors"
+                >
+                    {uploading ? 'Subiendo...' : (<><Upload className="w-4 h-4" /> Subir</>)}
+                </button>
+                <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleFile}
+                />
+            </div>
+            {value && (
+                <div className="flex items-center gap-3">
+                    <img src={value} alt="Vista previa" className="h-16 w-16 object-cover rounded-lg border border-brand-gold/20" />
+                    <span className="text-[10px] text-brand-warm-gray/50 break-all">{value}</span>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// Modal para agregar un nuevo platillo (formulario controlado)
+const NuevoProductoModal: React.FC<{ onClose: () => void; onSave: (p: any) => void; saving: boolean }> = ({ onClose, onSave, saving }) => {
+    const [id, setId] = useState('');
+    const [name, setName] = useState('');
+    const [description, setDescription] = useState('');
+    const [price, setPrice] = useState('');
+    const [category, setCategory] = useState('especiales');
+    const [image, setImage] = useState('');
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!id.trim() || !name.trim() || price === '') return;
+        onSave({
+            id: id.trim(),
+            name: name.trim(),
+            description: description.trim() || undefined,
+            price: parseFloat(price),
+            category,
+            image: image.trim() || undefined,
+            options: []
+        });
+    };
+
+    return (
+        <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+        >
+            <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="bg-brand-crema-light w-full max-w-md rounded-2xl shadow-2xl overflow-hidden"
+            >
+                <div className="bg-gradient-to-r from-brand-green-dark to-brand-green p-6 text-brand-crema">
+                    <h3 className="text-lg font-bold">Agregar Nuevo Platillo</h3>
+                </div>
+                <form onSubmit={handleSubmit} className="p-6 space-y-4">
+                    <div>
+                        <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">ID (clave única)</label>
+                        <input
+                            value={id}
+                            onChange={(e) => setId(e.target.value)}
+                            required
+                            placeholder="ej. cafe_americano"
+                            className="w-full bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">Nombre</label>
+                        <input
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            required
+                            className="w-full bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">Descripción</label>
+                        <textarea
+                            value={description}
+                            onChange={(e) => setDescription(e.target.value)}
+                            rows={2}
+                            className="w-full bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">Precio</label>
+                        <input
+                            value={price}
+                            onChange={(e) => setPrice(e.target.value)}
+                            type="number"
+                            step="0.01"
+                            required
+                            className="w-full bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">Categoría</label>
+                        <select
+                            value={category}
+                            onChange={(e) => setCategory(e.target.value)}
+                            className="w-full bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
+                        >
+                            <option value="especiales">Destacados</option>
+                            <option value="bebidas">Bebidas</option>
+                            <option value="desayunos">Desayunos</option>
+                            <option value="antojitos">Antojitos</option>
+                            <option value="sopas">Sopas</option>
+                            <option value="mariscos">Mariscos</option>
+                            <option value="carnes">Carnes y Pollo</option>
+                            <option value="paninos">Paninos</option>
+                            <option value="ensaladas">Ensaladas</option>
+                            <option value="postres">Postres</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">Imagen</label>
+                        <ImagenProductoField value={image} onChange={setImage} />
+                    </div>
+                    <div className="flex gap-3 mt-6">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="flex-1 bg-brand-crema-dark text-brand-warm-gray font-bold py-2 rounded-lg hover:bg-brand-crema"
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            type="submit"
+                            disabled={saving}
+                            className="flex-1 bg-gradient-to-r from-brand-gold to-brand-gold-dark text-brand-green-dark font-bold py-2 rounded-lg disabled:opacity-50"
+                        >
+                            {saving ? 'Guardando...' : 'Guardar'}
+                        </button>
+                    </div>
+                </form>
+            </motion.div>
+        </motion.div>
+    );
+};
+
 // Component for editing a product
-const EditProductModal: React.FC<{ product: any; onClose: () => void; onUpdate: (id: string, updates: Partial<any>) => void }> = ({ product, onClose, onUpdate }) => {
+const EditProductModal: React.FC<{ product: any; onClose: () => void; onUpdate: (id: string, updates: Partial<any>) => void; saving: boolean }> = ({ product, onClose, onUpdate, saving }) => {
     const [name, setName] = useState(product.name);
     const [description, setDescription] = useState(product.description || '');
-    const [price, setPrice] = useState(product.price.toString());
+    const [price, setPrice] = useState(product.price?.toString() || '');
+    const [category, setCategory] = useState(product.category || 'especiales');
     const [image, setImage] = useState(product.image || '');
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         onUpdate(product.id, {
             name,
-            description,
+            description: description.trim() || undefined,
             price: parseFloat(price),
-            image
+            category,
+            image: image.trim() || undefined
         });
     };
 
@@ -1958,13 +2084,27 @@ const EditProductModal: React.FC<{ product: any; onClose: () => void; onUpdate: 
                         />
                     </div>
                     <div>
-                        <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">URL de la Imagen</label>
-                        <input
-                            value={image}
-                            onChange={(e) => setImage(e.target.value)}
+                        <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">Categoría</label>
+                        <select
+                            value={category}
+                            onChange={(e) => setCategory(e.target.value)}
                             className="w-full bg-brand-crema border border-brand-gold/20 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-gold"
-                            placeholder="https://..."
-                        />
+                        >
+                            <option value="especiales">Destacados</option>
+                            <option value="bebidas">Bebidas</option>
+                            <option value="desayunos">Desayunos</option>
+                            <option value="antojitos">Antojitos</option>
+                            <option value="sopas">Sopas</option>
+                            <option value="mariscos">Mariscos</option>
+                            <option value="carnes">Carnes y Pollo</option>
+                            <option value="paninos">Paninos</option>
+                            <option value="ensaladas">Ensaladas</option>
+                            <option value="postres">Postres</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold uppercase text-brand-warm-gray/60 mb-1 block">Imagen</label>
+                        <ImagenProductoField value={image} onChange={setImage} />
                     </div>
                     <div className="flex gap-3 mt-6">
                         <button
@@ -1976,9 +2116,10 @@ const EditProductModal: React.FC<{ product: any; onClose: () => void; onUpdate: 
                         </button>
                         <button
                             type="submit"
-                            className="flex-1 bg-gradient-to-r from-brand-gold to-brand-gold-dark text-brand-green-dark font-bold py-2 rounded-lg"
+                            disabled={saving}
+                            className="flex-1 bg-gradient-to-r from-brand-gold to-brand-gold-dark text-brand-green-dark font-bold py-2 rounded-lg disabled:opacity-50"
                         >
-                            Guardar Cambios
+                            {saving ? 'Guardando...' : 'Guardar Cambios'}
                         </button>
                     </div>
                 </form>

@@ -7,6 +7,7 @@ export interface Mesa {
     capacidad: number;
     estado: 'LIBRE' | 'OCUPADA' | 'COBRADA';
     ubicacion?: string;
+    mesero_activo_id?: number;
 }
 
 // Tipos para Meseros (Estática)
@@ -111,6 +112,11 @@ export interface Producto {
       choices: { name: string; extraPrice: number }[];
       required: boolean;
   }[];
+  calories?: number;
+  prepTime?: number;
+  spicy?: boolean;
+  vegetarian?: boolean;
+  activo?: boolean;
 }
 
 // Tipos para Extras

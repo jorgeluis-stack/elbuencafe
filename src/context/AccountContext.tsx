@@ -24,6 +24,7 @@ import {
     verificarCredencialesMesero,
     obtenerCuentaAbiertaPorMesa,
     obtenerCuentasAbiertasPorMesa,
+    obtenerCuentasAbiertas,
     obtenerCuentaPorId,
     obtenerCuentasPorMesa,
     crearCuenta,
@@ -56,7 +57,6 @@ import {
     obtenerCarroLocal,
     guardarCarroLocal,
     limpiarCarroLocal,
-    obtenerProductos,
     calcularTotalCuenta,
     obtenerEstadoMesaCompleto,
     suscribirACambios,
@@ -227,7 +227,26 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
     useEffect(() => {
         const unsubscribe = suscribirACambios('cuentas', () => {
             recargarContadorPendientes();
+
+            // La ocupación de las mesas se deriva de las cuentas ABIERTA (no del campo
+            // mesas.estado, que puede quedar stale si su escritura falla silenciosamente).
+            // Al cerrarse/cobrarse una cuenta desde OTRO dispositivo (otro mesero), hay
+            // que refrescar la grilla: si no, quien veía la mesa ocupada la seguirá viendo
+            // ocupada aunque ya esté disponible.
+            cargarMesas();
+
+            // Si el mesero tenía la mesa seleccionada y ya no tiene cuentas abiertas
+            // (fue cobrada/liberada desde otro lado), volver a la grilla de selección.
             if (mesaSeleccionada) {
+                obtenerCuentasAbiertasPorMesa(mesaSeleccionada.id).then((abiertas) => {
+                    if (abiertas.length === 0) {
+                        setMesaSeleccionada(null);
+                        setEstadoMesa(null);
+                        setCuentaActual(null);
+                        setMinicomandas([]);
+                        setCarroLocal([]);
+                    }
+                });
                 recargarEstadoMesaRef.current?.();
             }
         });
@@ -284,16 +303,47 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             console.error('Error al cargar mesas:', error);
         }
 
-        if (mesasData && mesasData.length > 0) {
-            setMesas(prev => {
-                return mesasData.map(m => {
-                    const local = prev.find(p => p.id === m.id);
-                    if (local && local.estado === 'OCUPADA' && m.estado === 'LIBRE') {
-                        return { ...m, estado: 'OCUPADA' };
-                    }
-                    return m;
-                });
+        // Fuente de verdad de ocupación: las cuentas ABIERTA (persisten en Supabase) y NO
+        // el campo mesas.estado, cuya escritura puede fallar silenciosamente (RLS/schema).
+        // Con esto, la ocupación propaga entre navegadores (A ocupa → B lo ve Ocupada).
+        const determinarOcupacion = async (lista: Mesa[]): Promise<Mesa[]> => {
+            let abiertas: Cuenta[] = [];
+            try {
+                // Solo cuentas ABIERTA en BD (rápido, sin traer todo el histórico)
+                abiertas = await obtenerCuentasAbiertas();
+            } catch (error) {
+                console.error('Error al cargar cuentas para estados de mesa:', error);
+            }
+
+            // Map mesa_id → cuentas ABIERTA (obtenerCuentasAbiertas ordena desc por fecha_apertura,
+            // así que el primer elemento por mesa es el más reciente = propietario actual)
+            const abiertasPorMesa: Record<number, Cuenta[]> = {};
+            abiertas.forEach(c => {
+                (abiertasPorMesa[c.mesa_id] ||= []).push(c);
             });
+
+            return lista.map(m => {
+                const abiertas = abiertasPorMesa[m.id];
+                if (abiertas && abiertas.length > 0) {
+                    const masReciente = abiertas[0];
+                    return {
+                        ...m,
+                        estado: 'OCUPADA',
+                        // Propietario real: columna mesero_activo_id (si existe en BD) o el
+                        // mesero de la cuenta abierta más reciente como respaldo
+                        mesero_activo_id: m.mesero_activo_id ?? masReciente.mesero_id
+                    };
+                }
+                // Sin cuentas ABIERTA la mesa no puede estar ocupada. Respetar 'COBRADA'
+                // (marca que quedó pendiente de liberar), pero forzar 'LIBRE' si la columna
+                // mesas.estado quedó stale en 'OCUPADA' (escritura fallida u orden de eventos).
+                const estadoCorregido = m.estado === 'COBRADA' ? 'COBRADA' : 'LIBRE';
+                return { ...m, estado: estadoCorregido, mesero_activo_id: m.estado === 'OCUPADA' ? undefined : m.mesero_activo_id };
+            });
+        };
+
+        if (mesasData && mesasData.length > 0) {
+            setMesas(await determinarOcupacion(mesasData));
         } else {
             // Fallback a localStorage
             const tableCountStr = localStorage.getItem('elbuencafe_table_count') || '15';
@@ -316,15 +366,7 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
                 ubicacion: 'Barra',
                 estado: 'LIBRE'
             });
-            setMesas(prev => {
-                return fakeMesas.map(m => {
-                    const existing = prev.find(p => p.id === m.id);
-                    if (existing && existing.estado === 'OCUPADA') {
-                        return { ...m, estado: 'OCUPADA', mesero_activo_id: existing.mesero_activo_id };
-                    }
-                    return m;
-                });
-            });
+            setMesas(await determinarOcupacion(fakeMesas));
         }
     };
 
@@ -515,10 +557,25 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
     // Seleccionar mesa
     const seleccionarMesa = async (mesa: Mesa, reemplazarMesero: boolean = false) => {
         try {
-            // Validar bloqueo por otro mesero (solo si no está confirmando reemplazo)
-            if (mesa.estado === 'OCUPADA' && mesa.mesero_activo_id &&
-                mesa.mesero_activo_id !== meseroLogueado!.id && !reemplazarMesero) {
-                setSolicitudReemplazo({ mesa, meseroActualId: mesa.mesero_activo_id });
+            // LEER FRESCO desde BD: la grilla puede estar desactualizada (navegador/realtime).
+            // Fuente de verdad de ocupación = cuentas ABIERTA (persisten en Supabase),
+            // no el campo mesas.estado que puede estar stale o fallar su escritura en BD.
+            const mesaFresca = (await obtenerMesaPorId(mesa.id)) ?? mesa;
+            const abiertas = await obtenerCuentasAbiertasPorMesa(mesa.id);
+            const ocupada = abiertas.length > 0;
+            // Propietario real: mesero_activo_id (si existe) o el mesero de la cuenta más reciente
+            const propietario = mesaFresca.mesero_activo_id
+                ?? (abiertas.length > 0 ? abiertas[0].mesero_id : undefined);
+            const mesaObjetivo: Mesa = {
+                ...mesaFresca,
+                estado: ocupada ? 'OCUPADA' : mesaFresca.estado,
+                mesero_activo_id: propietario
+            };
+
+            // Bloqueo por otro mesero (solo si no está confirmando reemplazo)
+            if (ocupada && propietario &&
+                propietario !== meseroLogueado!.id && !reemplazarMesero) {
+                setSolicitudReemplazo({ mesa: mesaObjetivo, meseroActualId: propietario });
                 return;
             }
 
@@ -539,32 +596,20 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             }
             carroItems = (carroGuardado as CarroItem[]) || [];
 
-            // Manejar segegún estado de la mesa
-            if (mesa.estado === 'OCUPADA') {
-                // Mesa ocupada: intentar cargar cuenta abierta existente
-                try {
-                    cuenta = await obtenerCuentaAbiertaPorMesa(mesa.id);
-                } catch (e: any) {
-                    console.warn(`obtenerCuentaAbiertaPorMesa falló para mesa ${mesa.id}:`, e.message);
-                    // Fallback: obtener todas las cuentas abiertas de la mesa y tomar la primera
-                    try {
-                        const abiertas = await obtenerCuentasAbiertasPorMesa(mesa.id);
-                        cuenta = abiertas.length > 0 ? abiertas[0] : null;
-                    } catch (e2: any) {
-                        console.error('Fallback obtenerCuentasAbiertasPorMesa falló:', e2.message);
-                        cuenta = null;
-                    }
-                }
+            // Manejar según estado real de la mesa (cuentas ABIERTA frescas)
+            if (ocupada) {
+                // Mesa ocupada: usar la cuenta abierta más reciente (ya consultada arriba)
+                cuenta = abiertas.length > 0 ? abiertas[0] : null;
 
                 if (cuenta) {
                     // Hay cuenta abierta: cargar minicomandas y estado
                     minis = await obtenerMinicomandasPorCuenta(cuenta.id);
                     estadoCompleto = await obtenerEstadoMesaCompleto(mesa.id);
                 } else {
-                    // Mesa figura OCUPADA pero no tiene cuenta abierta: continuar para crear cuenta nueva
+                    // Mesa figura ocupada pero no tiene cuenta abierta: crear cuenta nueva
                     cuenta = null;
                 }
-            } else if (mesa.estado === 'COBRADA') {
+            } else if (mesaObjetivo.estado === 'COBRADA') {
                 // Mesa cobrada: requiere confirmación explícita para liberar y reabrir
                 const confirmar = window.confirm(
                     `La mesa ${mesa.numero} está en estado "Cobrada".\n\n` +
@@ -610,20 +655,23 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             // Actualizar el estado local de mesas inmediatamente (sin esperar round-trip a BD)
                 setMesas(prev => prev.map(m => m.id === mesa.id ? { ...m, estado: 'OCUPADA', mesero_activo_id: meseroId } : m));
 
-                // Bloquear mesa al mesero actual
-                await supabase.from('mesas').update({ mesero_activo_id: meseroId }).eq('id', mesa.id);
+                // Bloquear mesa al mesero actual (la ocupación real se deriva de la cuenta ABIERTA,
+                // así que si esta escritura falla (RLS/columna faltante) la vista sigue correcta)
+                const { error: errBloqueo } = await supabase.from('mesas').update({ mesero_activo_id: meseroId }).eq('id', mesa.id);
+                if (errBloqueo) console.error('No se pudo guardar el mesero activo de la mesa:', errBloqueo.message);
             }
 
             // Lógica de reemplazo: si se está reemplazando a otro mesero
-            if (reemplazarMesero && mesa.mesero_activo_id && mesa.mesero_activo_id !== meseroLogueado.id) {
+            if (reemplazarMesero && propietario && propietario !== meseroLogueado.id) {
                 await crearHistorialAccion({
                     mesa_id: mesa.id,
-                    mesero_id: mesa.mesero_activo_id,
+                    mesero_id: propietario,
                     accion: 'REEMPLAZADO',
                     descripcion: `Tu mesa ${mesa.numero} fue tomada por ${meseroLogueado.nombre}`,
                 });
                 const meseroId = meseroLogueado.id === 0 ? 999 : meseroLogueado.id;
-                await supabase.from('mesas').update({ mesero_activo_id: meseroId }).eq('id', mesa.id);
+                const { error: errReemplazo } = await supabase.from('mesas').update({ mesero_activo_id: meseroId }).eq('id', mesa.id);
+                if (errReemplazo) console.error('No se pudo actualizar el mesero activo al reemplazar:', errReemplazo.message);
                 setMesas(prev => prev.map(m => m.id === mesa.id ? { ...m, mesero_activo_id: meseroId } : m));
             }
 
@@ -633,7 +681,7 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
                 ? cuentasDeLaMesa.findIndex(c => c.id === cuenta.id)
                 : 0;
 
-            setMesaSeleccionada(mesa);
+            setMesaSeleccionada(mesaObjetivo);
             setCuentaActual(cuenta);
             setMinicomandas(minis);
             setEstadoMesa(estadoCompleto);
@@ -643,8 +691,8 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
 
             console.log('[DEBUG seleccionarMesa]', {
                 mesaId: mesa.id,
-                mesaEstado: mesa.estado,
-                meseroActivoId: mesa.mesero_activo_id,
+                mesaEstado: mesaObjetivo.estado,
+                meseroActivoId: mesaObjetivo.mesero_activo_id,
                 meseroLogueadoId: meseroLogueado?.id,
                 cuentaEncontrada: !!cuenta,
                 cuentaId: cuenta?.id,
@@ -1082,7 +1130,8 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             setMesas(prev => prev.map(m => m.id === mesaSeleccionada.id ? { ...m, estado: 'LIBRE', mesero_activo_id: undefined } : m));
 
             // Limpiar bloqueo de mesa
-            await supabase.from('mesas').update({ mesero_activo_id: null }).eq('id', mesaSeleccionada.id);
+            const { error: errLiberarMesa } = await supabase.from('mesas').update({ mesero_activo_id: null }).eq('id', mesaSeleccionada.id);
+            if (errLiberarMesa) console.error('No se pudo liberar el mesero activo de la mesa:', errLiberarMesa.message);
 
             // Limpiar estado
             setMesaSeleccionada(null);
@@ -1148,26 +1197,46 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
                 }
             }
 
+            // Mapa minicomanda -> cuenta para acumular el monto real al cerrar
+            const miniCuentaPorId = new Map<number, number>();
+            for (const c of cuentas) {
+                const minis = await obtenerMinicomandasPorCuenta(c.id);
+                for (const m of minis) miniCuentaPorId.set(m.id, c.id);
+            }
+
             // Procesar SOLO los ítems de los asientos seleccionados.
             //  - Ítem normal: se elimina.
             //  - Ítem compartido: NO se elimina; se marca como pagado el share
             //    del comensal seleccionado (la resolución de la porción pendiente
             //    ya se hizo antes en la UI mediante el diálogo de resolución).
+            // Registrar los montos efectivamente cobrados por cuenta (evita que el
+            // cierre guarde 0 y se pierda el total para el corte de caja)
+            const cobradoPorCuenta: Record<number, number> = {};
+            const sumarCobro = (cuentaId: number, monto: number) => {
+                if (monto <= 0) return;
+                cobradoPorCuenta[cuentaId] = (cobradoPorCuenta[cuentaId] || 0) + monto;
+            };
+
             for (const it of todosLosItems) {
+                const cuentaIdItem = miniCuentaPorId.get(it.minicomanda_id);
                 const esCompartido = it.seat_number === null;
                 if (!esCompartido) {
                     if (seatNumbers.includes(it.seat_number || 1)) {
+                        if (cuentaIdItem) sumarCobro(cuentaIdItem, it.total_item || 0);
                         await eliminarItemMinicomanda(it.id);
                     }
                     continue;
                 }
                 // Ítem compartido: marcar como pagado los shares de los asientos cobrados
                 const shares = await obtenerSharesPorItem(it.id);
+                let pagoCompartido = 0;
                 for (const share of shares) {
                     if (seatNumbers.includes(share.seat_number) && !share.pagado) {
                         await marcarSharePagado(share.id, true);
+                        pagoCompartido += share.monto || 0;
                     }
                 }
+                if (cuentaIdItem) sumarCobro(cuentaIdItem, pagoCompartido);
             }
 
             // Recalcular total de cada cuenta ignorando ítems compartidos liquidados;
@@ -1188,7 +1257,8 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
                     }
                 }
                 if (!tieneActivo) {
-                    await cerrarCuenta(c.id, 0, 0, metodoPago);
+                    const montoCierre = cobradoPorCuenta[c.id] ?? totalCuenta ?? 0;
+                    await cerrarCuenta(c.id, montoCierre, 0, metodoPago);
                 } else {
                     await actualizarCuenta({ ...c, total_acumulado: totalCuenta });
                 }
@@ -1210,7 +1280,8 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             if (cuentasRestantes.length === 0) {
                 // Mesa liberada para nuevos clientes
                 await actualizarEstadoMesa(mesaSeleccionada.id, 'LIBRE');
-                await supabase.from('mesas').update({ mesero_activo_id: null }).eq('id', mesaSeleccionada.id);
+                const { error: errLiberarMesa } = await supabase.from('mesas').update({ mesero_activo_id: null }).eq('id', mesaSeleccionada.id);
+            if (errLiberarMesa) console.error('No se pudo liberar el mesero activo de la mesa:', errLiberarMesa.message);
                 setMesaSeleccionada(null);
                 setEstadoMesa(null);
                 setCuentaActual(null);
@@ -1352,15 +1423,18 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
         }
 
         try {
-            // Si hay cuenta abierta, cerrarla primero (marcar como cancelada/cerrada sin cobro)
-            if (cuentaActual && cuentaActual.estado === 'ABIERTA') {
+            // Cerrar TODAS las cuentas ABIERTA de la mesa (puede haber varias si se abrieron
+            // duplicadas en pruebas o por división por asiento). Si solo se cerrara la actual,
+            // al recargar la mesa seguiría "ocupada" por las cuentas restantes.
+            const abiertasDeMesa = await obtenerCuentasAbiertasPorMesa(mesaSeleccionada.id);
+            for (const cuenta of abiertasDeMesa) {
                 // Cerrar cuenta sin cobro (monto 0, cambio 0)
-                await cerrarCuenta(cuentaActual.id, 0, 0, 'efectivo');
+                await cerrarCuenta(cuenta.id, 0, 0, 'efectivo');
 
                 // Guardar en historial
                 if (meseroLogueado) {
                     await crearHistorialAccion({
-                        cuenta_id: cuentaActual.id,
+                        cuenta_id: cuenta.id,
                         mesa_id: mesaSeleccionada.id,
                         mesero_id: meseroLogueado.id,
                         accion: 'CANCELAR_CUENTA',
@@ -1372,7 +1446,8 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
 
             // Actualizar estado de mesa a LIBRE
             await actualizarEstadoMesa(mesaSeleccionada.id, 'LIBRE');
-            await supabase.from('mesas').update({ mesero_activo_id: null }).eq('id', mesaSeleccionada.id);
+            const { error: errLiberarMesa } = await supabase.from('mesas').update({ mesero_activo_id: null }).eq('id', mesaSeleccionada.id);
+            if (errLiberarMesa) console.error('No se pudo liberar el mesero activo de la mesa:', errLiberarMesa.message);
             await limpiarCarroLocal(mesaSeleccionada.id);
             setMesas(prev => prev.map(m => m.id === mesaSeleccionada.id ? { ...m, estado: 'LIBRE', mesero_activo_id: undefined } : m));
 

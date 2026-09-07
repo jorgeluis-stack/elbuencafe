@@ -168,6 +168,10 @@ export const obtenerTodasLasCuentas = (): Promise<Cuenta[]> => {
     return getAllRecords<Cuenta>('cuentas');
 };
 
+export const obtenerCuentasAbiertas = (): Promise<Cuenta[]> => {
+    return getAllRecords<Cuenta>('cuentas').then(cuentas => cuentas.filter(c => c.estado === 'ABIERTA'));
+};
+
 export const obtenerCuentaPorId = (id: number): Promise<Cuenta | undefined> => {
     return getRecordById<Cuenta>('cuentas', id);
 };
@@ -516,6 +520,67 @@ export const obtenerProductos = (): Promise<Producto[]> => {
                 resolve(PRODUCTS);
             }).catch(reject);
         }
+    });
+};
+
+// Fallbacks locales del catálogo (cuando Supabase no está configurado).
+// Misma interfaz que las funciones de SupabaseQueriesImpl.ts.
+const leerProductosLocal = (): Producto[] => {
+    const savedProducts = localStorage.getItem('elbuencafe_products');
+    if (savedProducts) {
+        try { return JSON.parse(savedProducts) as Producto[]; } catch { /* ignorar */ }
+    }
+    return [];
+};
+
+const guardarProductosLocal = (productos: Producto[]): void => {
+    localStorage.setItem('elbuencafe_products', JSON.stringify(productos));
+};
+
+export const listarProductos = (): Promise<Producto[]> => {
+    return new Promise((resolve) => {
+        const guardados = leerProductosLocal();
+        if (guardados.length > 0) {
+            resolve(guardados);
+        } else {
+            import('../data/menu').then(({ PRODUCTS }) => {
+                guardarProductosLocal(PRODUCTS);
+                resolve(PRODUCTS);
+            });
+        }
+    });
+};
+
+export const crearProducto = (producto: Producto): Promise<Producto> => {
+    return new Promise((resolve) => {
+        const guardados = leerProductosLocal();
+        guardados.push(producto);
+        guardarProductosLocal(guardados);
+        resolve(producto);
+    });
+};
+
+export const actualizarProducto = (clave: string, cambios: Partial<Producto>): Promise<void> => {
+    return new Promise((resolve) => {
+        const guardados = leerProductosLocal().map(p =>
+            p.id === clave ? { ...p, ...cambios, id: clave } : p
+        );
+        guardarProductosLocal(guardados);
+        resolve();
+    });
+};
+
+export const eliminarProducto = (clave: string): Promise<void> => {
+    return new Promise((resolve) => {
+        const guardados = leerProductosLocal().filter(p => p.id !== clave);
+        guardarProductosLocal(guardados);
+        resolve();
+    });
+};
+
+export const subirImagenProducto = (_file: File): Promise<string> => {
+    return new Promise((_resolve, reject) => {
+        reject(new Error('Supabase no configurado: no se pueden subir imágenes. Usa una URL.'));
     });
 };
 
