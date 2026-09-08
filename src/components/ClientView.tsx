@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useOrders } from '../context/OrderContext';
 import { CATEGORIES } from '../data/menu';
 import { CategoryId } from '../types';
@@ -14,6 +14,7 @@ import {
   UtensilsCrossed,
   Clock,
   ChevronRight,
+  ChevronLeft,
   ArrowLeft,
   LayoutGrid
 } from 'lucide-react';
@@ -48,6 +49,11 @@ export const ClientView: React.FC = () => {
   const activeCategoryName = activeCategory === 'todas'
     ? 'Todas las categorías'
     : CATEGORIES.find(c => c.id === activeCategory)?.name || 'Menú';
+
+  const catScrollRef = useRef<HTMLDivElement>(null);
+  const scrollCats = (dir: 'left' | 'right') => {
+    catScrollRef.current?.scrollBy({ left: dir === 'left' ? -280 : 280, behavior: 'smooth' });
+  };
 
   return (
     <div id="client-view" className="min-h-screen bg-[#0F1A0F] text-white pb-32">
@@ -255,8 +261,25 @@ export const ClientView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Category selector — siempre visible, rápido e intuitivo */}
-              <div className="sticky top-[65px] z-30 -mx-4 md:-mx-8 px-4 md:px-8 py-3 bg-[#0F1A0F]/90 backdrop-blur-xl border-y border-[#2A452A]/50 flex gap-2 overflow-x-auto no-scrollbar scroll-smooth snap-x">
+              {/* Category selector — siempre visible, rápido e intuitivo (con flechas y arrastre en PC) */}
+              <div className="sticky top-[65px] z-30 -mx-4 md:-mx-8 px-4 md:px-8 py-3 bg-[#0F1A0F]/90 backdrop-blur-xl border-y border-[#2A452A]/50 flex items-center gap-2">
+                <button
+                  onClick={() => scrollCats('left')}
+                  aria-label="Desplazar categorías a la izquierda"
+                  className="hidden md:flex shrink-0 w-8 h-8 items-center justify-center rounded-full bg-[#1A2E1A] border border-[#2A452A] text-[#B8C4B8] hover:text-white hover:border-brand-gold/40 hover:bg-[#2A452A] transition-colors"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <div
+                  ref={catScrollRef}
+                  onWheel={(e) => {
+                    if (Math.abs(e.deltaX) < Math.abs(e.deltaY)) {
+                      e.currentTarget.scrollLeft += e.deltaY;
+                    }
+                  }}
+                  className="flex gap-2 overflow-x-auto no-scrollbar md:scrollbar-thin scroll-smooth snap-x flex-1 cursor-grab active:cursor-grabbing select-none"
+                  style={{ scrollbarWidth: 'thin', scrollbarColor: '#2A452A transparent' } as any}
+                >
                 <button
                   onClick={() => setActiveCategory('todas' as any)}
                   className={`snap-start shrink-0 px-4 md:px-5 py-2.5 md:py-3 rounded-2xl text-xs md:text-sm font-bold transition-all duration-300 border flex items-center gap-2 shadow-sm ${
@@ -289,6 +312,14 @@ export const ClientView: React.FC = () => {
                     </span>
                   </button>
                 ))}
+                </div>
+                <button
+                  onClick={() => scrollCats('right')}
+                  aria-label="Desplazar categorías a la derecha"
+                  className="hidden md:flex shrink-0 w-8 h-8 items-center justify-center rounded-full bg-[#1A2E1A] border border-[#2A452A] text-[#B8C4B8] hover:text-white hover:border-brand-gold/40 hover:bg-[#2A452A] transition-colors"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
               </div>
             </div>
 
