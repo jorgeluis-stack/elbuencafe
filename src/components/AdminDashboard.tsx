@@ -308,12 +308,7 @@ export const AdminDashboard: React.FC = () => {
     const difference = parseFloat(physicalCash || '0') - paidStats.efectivo;
 
     const handleDownloadReport = () => {
-        const reportDate = new Date(selectedDate).toLocaleDateString('es-MX', {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-        });
+        const reportDate = formatearFechaLocal(selectedDate);
 
         let report = `═══════════════════════════════════════════════════════════════
               REPORTE DE VENTAS - EL BUEN CAFÉ
@@ -341,7 +336,7 @@ Reportado:            $${dailyStats.efectivo.toFixed(2)}
 Diferencia:           $${difference.toFixed(2)}
 ───────────────────────────────────────────────────────────────
 
-📋 DETALLE DE PEDIDOS
+📋 DETALLE DE VENTAS
 ───────────────────────────────────────────────────────────────
 `;
 
@@ -563,9 +558,9 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                     </div>
                 </motion.div>
 
-                {/* Action Buttons */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                    {/* Gestionar Menú - Solo visible para admin */}
+                {/* Operación: acciones del día a día */}
+                <h4 className="text-xs font-bold uppercase tracking-wider text-brand-warm-gray/50 mb-3">Operación</h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
                     {canManageMenu && (
                         <motion.button
                             whileHover={{ scale: 1.02 }}
@@ -578,6 +573,34 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                         </motion.button>
                     )}
 
+                    {canManageUsers && (
+                        <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => setShowExtrasManager(true)}
+                            className="bg-gradient-to-r from-brand-gold to-brand-gold-dark hover:from-brand-gold-light hover:to-brand-gold text-brand-green-dark font-bold py-6 rounded-2xl shadow-lg shadow-brand-gold/20 flex flex-col items-center justify-center gap-3 transition-all"
+                        >
+                            <Plus className="w-8 h-8" />
+                            <span>Extras</span>
+                        </motion.button>
+                    )}
+
+                    {canManageUsers && (
+                        <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => setShowEmployeeManager(true)}
+                            className="bg-gradient-to-r from-brand-green to-brand-green-dark hover:from-brand-green-light hover:to-brand-green text-brand-crema font-bold py-6 rounded-2xl shadow-lg shadow-brand-green/20 flex flex-col items-center justify-center gap-3 transition-all"
+                        >
+                            <Users className="w-8 h-8" />
+                            <span>Gestionar Empleados</span>
+                        </motion.button>
+                    )}
+                </div>
+
+                {/* Administración: cierres y configuración */}
+                <h4 className="text-xs font-bold uppercase tracking-wider text-brand-warm-gray/50 mb-3">Administración</h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                     <motion.button
                         whileHover={{ scale: 1.02 }}
                         whileTap={{ scale: 0.98 }}
@@ -588,7 +611,6 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                         <span>Descargar Reporte</span>
                     </motion.button>
 
-                    {/* Configuración - Solo visible para admin */}
                     {canManageUsers && (
                         <motion.button
                             whileHover={{ scale: 1.02 }}
@@ -603,40 +625,13 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                 }
                                 setShowConfigModal(true);
                             }}
-                            className="bg-gradient-to-r from-brand-crema-dark to-brand-warm-gray hover:from-brand-crema hover:to-brand-warm-gray/80 text-brand-green-dark font-bold py-6 rounded-2xl shadow-lg shadow-brand-warm-gray/20 flex flex-col items-center justify-center gap-3 transition-all"
+                            className="bg-gradient-to-r from-brand-green to-brand-green-dark hover:from-brand-green-light hover:to-brand-green text-brand-crema font-bold py-6 rounded-2xl shadow-lg shadow-brand-green/20 flex flex-col items-center justify-center gap-3 transition-all"
                         >
                             <Settings className="w-8 h-8" />
                             <span>Configuración</span>
                         </motion.button>
                     )}
 
-                    {/* Gestionar Empleados - Solo visible para admin */}
-                    {canManageUsers && (
-                        <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => setShowEmployeeManager(true)}
-                            className="bg-gradient-to-r from-brand-green to-brand-green-dark hover:from-brand-green-light hover:to-brand-green text-brand-crema font-bold py-6 rounded-2xl shadow-lg shadow-brand-green/20 flex flex-col items-center justify-center gap-3 transition-all"
-                        >
-                            <Users className="w-8 h-8" />
-                            <span>Gestionar Empleados</span>
-                        </motion.button>
-                    )}
-
-                    {/* Gestionar Extras - Solo visible para admin */}
-                    {canManageUsers && (
-                        <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => setShowExtrasManager(true)}
-                            className="bg-gradient-to-r from-pink-500 to-pink-600 hover:from-pink-600 hover:to-pink-700 text-white font-bold py-6 rounded-2xl shadow-lg shadow-pink-500/20 flex flex-col items-center justify-center gap-3 transition-all"
-                        >
-                            <Plus className="w-8 h-8" />
-                            <span>Extras</span>
-                        </motion.button>
-                    )}
-
-                    {/* Corte de Caja - Solo visible para admin */}
                     {canManageUsers && (
                         <motion.button
                             whileHover={{ scale: 1.02 }}
@@ -858,7 +853,7 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                 </div>
 
                                 <div className="bg-brand-crema-dark/5 p-4 rounded-xl">
-                                    <h3 className="text-sm font-bold uppercase text-brand-warm-gray/60 mb-3">Detalles de Pedidos</h3>
+                                    <h3 className="text-sm font-bold uppercase text-brand-warm-gray/60 mb-3">Detalles de Ventas</h3>
                                     <div className="space-y-4 max-h-60 overflow-y-auto">
                                         {dailyOrders.map((order) => (
                                             <div key={order.id} className="border-b border-brand-gold/10 pb-3 last:border-0">
@@ -1595,7 +1590,7 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                 <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
                                     <p className="text-sm text-red-600 font-bold flex items-center gap-2">
                                         <RotateCcw className="w-5 h-5" />
-                                        Esta acción archivará todos los pedidos actuales y reiniciará los contadores a cero.
+                                        Esta acción archivará todas las ventas actuales y reiniciará los contadores a cero.
                                     </p>
                                 </div>
 
@@ -1605,14 +1600,14 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                     <div className="space-y-2 text-sm">
                                         <div className="flex justify-between">
                                             <span className="text-brand-warm-gray/60">Fecha:</span>
-                                            <span className="font-bold text-brand-green-dark">{new Date(selectedDate).toLocaleDateString('es-MX', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
+                                            <span className="font-bold text-brand-green-dark">{formatearFechaLocal(selectedDate)}</span>
                                         </div>
                                         <div className="flex justify-between">
-                                            <span className="text-brand-warm-gray/60">Total de Pedidos:</span>
+                                            <span className="text-brand-warm-gray/60">Total de Ventas:</span>
                                             <span className="font-bold text-brand-green-dark">{dailyOrders.length}</span>
                                         </div>
                                         <div className="flex justify-between">
-                                            <span className="text-brand-warm-gray/60">Pedidos Cobrados:</span>
+                                            <span className="text-brand-warm-gray/60">Ventas Cobradas:</span>
                                             <span className="font-bold text-green-600">{paidOrders.length}</span>
                                         </div>
                                         <div className="border-t border-brand-gold/10 pt-2 mt-2">
