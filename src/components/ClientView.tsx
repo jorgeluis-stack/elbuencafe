@@ -13,7 +13,9 @@ import {
   Flame,
   UtensilsCrossed,
   Clock,
-  ChevronRight
+  ChevronRight,
+  ArrowLeft,
+  LayoutGrid
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -221,8 +223,17 @@ export const ClientView: React.FC = () => {
         {activeTab === 'menu' && (
           <div className="space-y-8 animate-fadeIn">
 
-            {/* SEARCH BAR & CATEGORY TABS */}
+            {/* VOLVER A CATEGORÍAS + SEARCH */}
             <div className="space-y-4">
+              <button
+                onClick={() => { setSearchQuery(''); setActiveTab('inicio'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                className="inline-flex items-center gap-2 text-xs md:text-sm font-bold text-brand-gold hover:text-white transition-colors bg-[#1A2E1A] border border-[#2A452A] hover:border-brand-gold/40 px-4 py-2 rounded-xl"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <LayoutGrid className="w-4 h-4" />
+                <span>Ver todas las categorías</span>
+              </button>
+
               <div className="max-w-xl mx-auto">
                 <div className="relative">
                   <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#7A8A7A]" />
@@ -267,10 +278,26 @@ export const ClientView: React.FC = () => {
               </div>
 
               {filteredProducts.length === 0 ? (
-                <div className="bg-[#1A2E1A] rounded-3xl p-16 text-center border border-[#2A452A] shadow-2xl">
+                <div className="bg-[#1A2E1A] rounded-3xl p-10 md:p-16 text-center border border-[#2A452A] shadow-2xl">
                   <span className="text-6xl">🍽️</span>
                   <h4 className="font-display font-bold text-white text-lg mt-4">No encontramos platillos</h4>
-                  <p className="text-sm text-[#7A8A7A] mt-1 max-w-md mx-auto">Prueba buscando con otro término o selecciona otra categoría superior en el menú.</p>
+                  <p className="text-sm text-[#7A8A7A] mt-1 max-w-md mx-auto">Prueba con otro término o explora otra categoría.</p>
+                  <div className="flex flex-wrap gap-3 justify-center mt-6">
+                    {searchQuery && (
+                      <button
+                        onClick={() => setSearchQuery('')}
+                        className="px-5 py-2.5 bg-brand-gold text-[#0F1A0F] font-bold rounded-xl text-sm hover:scale-105 transition-transform"
+                      >
+                        Limpiar búsqueda
+                      </button>
+                    )}
+                    <button
+                      onClick={() => { setSearchQuery(''); setActiveTab('inicio'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                      className="px-5 py-2.5 bg-[#0F1A0F] text-brand-gold border border-brand-gold/30 font-bold rounded-xl text-sm hover:bg-[#1A2E1A] transition-colors inline-flex items-center gap-2"
+                    >
+                      <LayoutGrid className="w-4 h-4" /> Ver todas las categorías
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
