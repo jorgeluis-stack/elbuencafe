@@ -1513,8 +1513,7 @@ export const WaiterView: React.FC = () => {
         isOpen={!!selectedProductDetail}
         onClose={() => setSelectedProductDetail(null)}
         onAdd={(product, quantity, notes, options, extras) => {
-          agregarAlCarro(product, quantity, notes, options, extras, comensalActivo);
-          setSelectedProductDetail(null);
+          try { agregarAlCarro(product, quantity, notes, options, extras, comensalActivo); } finally { setSelectedProductDetail(null); }
         }}
       />
 

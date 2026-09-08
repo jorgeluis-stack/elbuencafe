@@ -35,13 +35,15 @@ export const RoleAccessModal: React.FC<RoleAccessModalProps> = ({ isOpen, onClos
 
     const handleLogin = (e: React.FormEvent) => {
         e.preventDefault();
+        if (isLoading) return;
         setError('');
         setIsLoading(true);
 
         setTimeout(async () => {
-            let userFound = users.find(
-                u => u.username.toLowerCase() === username.toLowerCase() && u.password === password
-            );
+            try {
+                let userFound = users.find(
+                    u => u.username.toLowerCase() === username.toLowerCase() && u.password === password
+                );
 
             if (!userFound) {
                 try {
@@ -105,8 +107,13 @@ export const RoleAccessModal: React.FC<RoleAccessModalProps> = ({ isOpen, onClos
             }
 
             setIsLoading(false);
-            onRoleSelected(selectedRole, username, password);
+            onRoleSelected(selectedRole!, username, password);
             handleCloseInternal();
+            } catch (err) {
+                console.error('Error en login:', err);
+                setError('Error interno, intenta de nuevo');
+                setIsLoading(false);
+            }
         }, 500);
     };
 
