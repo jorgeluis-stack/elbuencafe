@@ -26,20 +26,28 @@ export const ClientView: React.FC = () => {
   } = useOrders();
 
   const [activeTab, setActiveTab] = useState<'inicio' | 'menu'>('inicio');
-  const [activeCategory, setActiveCategory] = useState<CategoryId>('especiales');
+  const [activeCategory, setActiveCategory] = useState<CategoryId | 'todas'>('todas');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Catálogo vivo desde Supabase (fallback localStorage) — se actualiza con Realtime
   const { productos } = useProductos();
 
+  const categoryCounts = CATEGORIES.map(cat => ({
+    ...cat,
+    count: productos.filter(p => p.category === cat.id).length
+  }));
+  const totalCount = productos.length;
+
   const filteredProducts = productos.filter(product => {
-    const matchesCategory = product.category === activeCategory;
+    const matchesCategory = activeCategory === 'todas' ? true : product.category === activeCategory;
     const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (product.description && product.description.toLowerCase().includes(searchQuery.toLowerCase()));
     return matchesCategory && matchesSearch;
   });
 
-  const activeCategoryName = CATEGORIES.find(c => c.id === activeCategory)?.name || 'Menú';
+  const activeCategoryName = activeCategory === 'todas'
+    ? 'Todas las categorías'
+    : CATEGORIES.find(c => c.id === activeCategory)?.name || 'Menú';
 
   return (
     <div id="client-view" className="min-h-screen bg-[#0F1A0F] text-white pb-32">
@@ -247,20 +255,38 @@ export const ClientView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Category selector pills */}
-              <div className="flex gap-2.5 overflow-x-auto pb-3 pt-2 no-scrollbar scroll-smooth snap-x">
-                {CATEGORIES.map((cat) => (
+              {/* Category selector — siempre visible, rápido e intuitivo */}
+              <div className="sticky top-[65px] z-30 -mx-4 md:-mx-8 px-4 md:px-8 py-3 bg-[#0F1A0F]/90 backdrop-blur-xl border-y border-[#2A452A]/50 flex gap-2 overflow-x-auto no-scrollbar scroll-smooth snap-x">
+                <button
+                  onClick={() => setActiveCategory('todas' as any)}
+                  className={`snap-start shrink-0 px-4 md:px-5 py-2.5 md:py-3 rounded-2xl text-xs md:text-sm font-bold transition-all duration-300 border flex items-center gap-2 shadow-sm ${
+                    activeCategory === 'todas'
+                      ? 'bg-brand-gold text-[#0F1A0F] border-brand-gold shadow-lg shadow-brand-gold/20 scale-105'
+                      : 'bg-[#1A2E1A] text-[#B8C4B8] border-[#2A452A] hover:border-brand-gold/40 hover:text-white'
+                  }`}
+                >
+                  <LayoutGrid className="w-4 h-4" />
+                  <span>Todas</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${activeCategory === 'todas' ? 'bg-[#0F1A0F] text-brand-gold' : 'bg-[#0F1A0F] text-[#7A8A7A] border border-[#2A452A]'}`}>
+                    {totalCount}
+                  </span>
+                </button>
+                {categoryCounts.map((cat) => (
                   <button
                     key={cat.id}
                     onClick={() => setActiveCategory(cat.id)}
-                    className={`snap-start shrink-0 px-5 py-3 rounded-2xl text-xs md:text-sm font-bold transition-all duration-300 border flex items-center gap-2 shadow-sm ${
+                    className={`snap-start shrink-0 px-4 md:px-5 py-2.5 md:py-3 rounded-2xl text-xs md:text-sm font-bold transition-all duration-300 border flex items-center gap-2 shadow-sm ${
                       activeCategory === cat.id
                         ? 'bg-brand-gold text-[#0F1A0F] border-brand-gold shadow-lg shadow-brand-gold/20 scale-105'
-                        : 'bg-[#1A2E1A] text-[#B8C4B8] border-[#2A452A] hover:border-brand-gold/40'
+                        : 'bg-[#1A2E1A] text-[#B8C4B8] border-[#2A452A] hover:border-brand-gold/40 hover:text-white'
                     }`}
                   >
-                    <span>{cat.icon}</span>
-                    <span>{cat.name}</span>
+                    <span className="text-base">{cat.icon}</span>
+                    <span className="hidden sm:inline">{cat.name}</span>
+                    <span className="sm:hidden">{cat.name.split(' ')[0]}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${activeCategory === cat.id ? 'bg-[#0F1A0F] text-brand-gold' : 'bg-black/30 text-[#7A8A7A]'}`}>
+                      {cat.count}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -299,9 +325,28 @@ export const ClientView: React.FC = () => {
                     </button>
                   </div>
                 </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {filteredProducts.map((product, idx) => (
+              ) : activeCategory === 'todas' && !searchQuery ? (
+                <div className="space-y-10">
+                  {CATEGORIES.map(cat => {
+                    const catProducts = productos.filter(p => p.category === cat.id);
+                    if (catProducts.length === 0) return null;
+                    return (
+                      <div key={cat.id} className="space-y-4">
+                        <div className="flex items-center justify-between border-b border-[#2A452A] pb-3">
+                          <h3 className="text-lg md:text-xl font-display font-bold text-white flex items-center gap-2">
+                            <span className="text-xl">{cat.icon}</span>
+                            <span>{cat.name}</span>
+                            <span className="ml-2 text-xs font-mono bg-[#1A2E1A] text-[#7A8A7A] px-2 py-0.5 rounded-full border border-[#2A452A]">{catProducts.length}</span>
+                          </h3>
+                          <button
+                            onClick={() => setActiveCategory(cat.id)}
+                            className="text-xs font-bold text-brand-gold hover:text-white flex items-center gap-1 transition-colors"
+                          >
+                            Ver solo {cat.name} <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                          {catProducts.map((product, idx) => (
                     <motion.div
                       key={product.id}
                       initial={{ opacity: 0, y: 15 }}
@@ -376,6 +421,84 @@ export const ClientView: React.FC = () => {
                             )}
                           </div>
 
+                          <span className="text-brand-gold font-bold text-xs uppercase tracking-wider group-hover:underline">
+                            Ver detalles +
+                          </span>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {filteredProducts.map((product, idx) => (
+                    <motion.div
+                      key={product.id}
+                      initial={{ opacity: 0, y: 15 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: idx * 0.03, duration: 0.3 }}
+                      className="bg-[#1A2E1A] rounded-3xl overflow-hidden border border-[#2A452A] hover:border-brand-gold/60 hover:shadow-2xl hover:shadow-brand-gold/10 hover:-translate-y-1 transition-all duration-300 flex flex-col justify-between cursor-pointer group"
+                      onClick={() => setSelectedProduct(product)}
+                    >
+                      <div className={`w-full h-52 sm:h-56 bg-[#0F1A0F] overflow-hidden relative ${product.image ? 'hidden md:block' : 'hidden'}`}>
+                        {product.image && (
+                          <img
+                            src={product.image}
+                            alt={product.name}
+                            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
+                            referrerPolicy="no-referrer"
+                          />
+                        )}
+                        <div className="absolute inset-0 bg-gradient-to-t from-[#1A2E1A] via-transparent to-transparent opacity-80" />
+                        <div className="absolute top-3 left-3 flex flex-wrap gap-2">
+                          {product.popular && (
+                            <span className="bg-brand-gold text-[#0F1A0F] font-bold text-[10px] px-2.5 py-1 rounded-lg uppercase tracking-wider shadow-md">
+                              ⭐ Popular
+                            </span>
+                          )}
+                        </div>
+                        <div className="absolute bottom-3 right-3 bg-[#0F1A0F]/90 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-brand-gold/40 shadow-xl">
+                          <span className="font-display font-extrabold text-brand-gold text-lg">
+                            ${product.price.toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+                      {product.image && (
+                        <div className="md:hidden px-5 pt-3 flex justify-end">
+                          <span className="bg-[#0F1A0F]/90 backdrop-blur-md px-3 py-1 rounded-xl border border-brand-gold/40 text-brand-gold font-display font-extrabold text-base">
+                            ${product.price.toFixed(2)}
+                          </span>
+                        </div>
+                      )}
+                      <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
+                        <div className="space-y-2">
+                          <h4 className="font-display font-bold text-white text-lg tracking-tight group-hover:text-brand-gold transition-colors leading-snug">
+                            {product.name}
+                          </h4>
+                          {product.description && (
+                            <p className="text-[#B8C4B8] text-xs line-clamp-3 leading-relaxed">
+                              {product.description}
+                            </p>
+                          )}
+                        </div>
+                        <div className="pt-2 border-t border-[#2A452A]/60 flex items-center justify-between text-xs text-[#7A8A7A]">
+                          <div className="flex items-center gap-3">
+                            {product.prepTime && (
+                              <span className="flex items-center gap-1 font-mono">
+                                <Clock className="w-3.5 h-3.5 text-brand-gold" />
+                                {product.prepTime} min
+                              </span>
+                            )}
+                            {product.calories && (
+                              <span className="font-mono">
+                                {product.calories} kcal
+                              </span>
+                            )}
+                          </div>
                           <span className="text-brand-gold font-bold text-xs uppercase tracking-wider group-hover:underline">
                             Ver detalles +
                           </span>
