@@ -184,6 +184,17 @@ export interface ItemOpcion {
   precio_extra: number;
 }
 
+// Interface para Extra por ítem (hija de items_minicomanda).
+// nombre + precio son SNAPSHOT histórico de lo cobrado; extra_id es solo
+// referencia opcional al catálogo `extras` (puede quedar huérfana).
+export interface ItemExtra {
+  id: number;
+  item_id: number;
+  extra_id: number | null;
+  nombre: string;
+  precio: number;
+}
+
 // Interface para Historial de Acciones
 export interface HistorialAccion {
   id: number;

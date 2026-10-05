@@ -3,7 +3,7 @@
 import { Mesa, Mesero, Cuenta, Minicomanda, ItemMinicomanda, ItemOpcion, HistorialAccion } from './Schema';
 
 const DB_NAME = 'elbuencafe_db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 // Función para abrir la base de datos
 export const openDB = (): Promise<IDBDatabase> => {
@@ -14,7 +14,7 @@ export const openDB = (): Promise<IDBDatabase> => {
             const db = (event.target as IDBOpenDBRequest).result;
 
             // Eliminar tablas existentes para recrearlas con autoIncrement
-            const storesToDelete = ['mesas', 'meseros', 'cuentas', 'minicomandas', 'items_minicomanda', 'items_opciones', 'historial_acciones', 'carro_local'];
+            const storesToDelete = ['mesas', 'meseros', 'cuentas', 'minicomandas', 'items_minicomanda', 'items_opciones', 'item_extras', 'historial_acciones', 'carro_local'];
             storesToDelete.forEach(store => {
                 if (db.objectStoreNames.contains(store)) {
                     db.deleteObjectStore(store);
@@ -54,6 +54,10 @@ export const openDB = (): Promise<IDBDatabase> => {
             // Crear tabla de Items Opciones
             const itemsOpcionesStore = db.createObjectStore('items_opciones', { keyPath: 'id', autoIncrement: true });
             itemsOpcionesStore.createIndex('item_id', 'item_id', { unique: false });
+
+            // Crear tabla de Extras por ítem (snapshot histórico nombre+precio)
+            const itemExtrasStore = db.createObjectStore('item_extras', { keyPath: 'id', autoIncrement: true });
+            itemExtrasStore.createIndex('item_id', 'item_id', { unique: false });
 
             // Crear tabla de Historial de Acciones
             const historialStore = db.createObjectStore('historial_acciones', { keyPath: 'id', autoIncrement: true });

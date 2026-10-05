@@ -204,3 +204,65 @@ body {
   border-color: rgba(201, 169, 110, 0.45);
   box-shadow: 0 4px 24px rgba(201, 169, 110, 0.08);
 }
+
+/* ── Waiter module (Toma de Orden) scoped tokens — FASE 1 ──
+   No modifican los tokens globales brand-*. Solo aplican dentro de #waiter-view. */
+#waiter-view {
+  width: 100%;
+  max-width: none;
+  --waiter-bg: #0B190C;
+  --waiter-panel: #102512;
+  --waiter-panel-secondary: #172D18;
+  --waiter-border: #284228;
+  --waiter-primary: #D6A928;
+  --waiter-gold-secondary: #C7A866;
+  --waiter-text: #F3F0E8;
+  --waiter-text-secondary: #A9B2A6;
+  --waiter-success: #4FA86A;
+  --waiter-danger: #C65353;
+  background-color: var(--waiter-bg);
+}
+
+.waiter-header {
+  height: 64px;
+  min-height: 64px;
+  max-height: 64px;
+  background-color: var(--waiter-panel);
+  border: 1px solid var(--waiter-border);
+  border-radius: 10px;
+}
+
+.waiter-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+/* 1100-1399px: ~58% productos / ~42% comanda, comanda >= 360px */
+@media (min-width: 1100px) {
+  .waiter-grid {
+    grid-template-columns: minmax(0, 1.38fr) minmax(360px, 1fr);
+  }
+}
+
+/* >= 1400px: ~62% productos / ~38% comanda */
+@media (min-width: 1400px) {
+  .waiter-grid {
+    grid-template-columns: minmax(0, 1.6fr) minmax(360px, 1fr);
+  }
+}
+
+.waiter-comanda-sticky {
+  min-width: 0;
+}
+
+@media (min-width: 1100px) {
+  /* Panel a todo el alto del grid: ocupa la fila completa para que header/tabs queden
+     alineados con las categorías y el footer permanezca abajo */
+  .waiter-comanda-sticky {
+    min-width: 360px;
+    align-self: stretch;
+    height: 100%;
+    min-height: 0;
+  }
+}

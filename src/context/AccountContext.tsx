@@ -35,6 +35,9 @@ import {
     obtenerItemMinicomandaPorId,
     crearMinicomanda,
     crearItemMinicomanda,
+    actualizarItemMinicomanda,
+    crearMultiplesOpciones,
+    crearMultiplesItemExtras,
     actualizarSeatItemMinicomanda,
     moverItemACuenta,
     crearItemComensalShare,
@@ -48,7 +51,8 @@ import {
     obtenerItemsPorMinicomanda,
     eliminarItemMinicomanda,
     obtenerTodasLasMinicomandas,
-    actualizarMinicomanda,
+    actualizarCuentaDeMinicomanda,
+    actualizarEstadoMinicomandaParcial,
     actualizarEstadoMesa,
     obtenerMesaPorId,
     obtenerMesaPorNumero,
@@ -133,8 +137,10 @@ interface AccountContextType {
 
     // Funciones de cuenta
     cobrarCuenta: (totalPagado: number, cambio: number, metodoPago: MetodoPago, referencia?: string) => Promise<CobroResultado | null>;
-    cobrarAsientos: (seatNumbers: number[], totalPagado: number, cambio: number, metodoPago: MetodoPago, referencia?: string) => Promise<CobroResultado | null>;
+    cobrarAsientos: (seatNumbers: number[], totalPagado: number, cambio: number, metodoPago: MetodoPago, referencia: string | undefined, idempotencyKey: string) => Promise<CobroResultado | null>;
     resolverSalidaComensal: (itemId: number, asientoSale: number, decision: 'pasar' | 'repartir' | 'completa', destino?: number, asientosRestantes?: number[]) => Promise<void>;
+    // Convierte un ítem individual en compartido durante el checkout (seat_number -> null + shares exactos).
+    compartirItemIndividual: (itemId: number, reparto: { seat: number; porcentaje: number; monto: number }[]) => Promise<void>;
     actualizarRepartoItem: (itemId: number, nuevosShares: { seat: number; porcentaje: number; monto: number }[]) => Promise<void>;
     obtenerSharesPorItem: (itemId: number) => Promise<any[]>;
     verHistorial: () => Promise<void>;
@@ -205,7 +211,9 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     // Suscripción Realtime: cambios en minicomandas (nuevas comandas, cambios de estado)
     useEffect(() => {
-        const unsubscribe = suscribirACambios('minicomandas', () => {
+        // [KDS-TRACE] Instrumentación temporal de diagnóstico — solo observa, no altera lógica.
+        const unsubscribe = suscribirACambios('minicomandas', (payload: any) => {
+            console.log(`[KDS-TRACE] REALTIME_MINICOMANDA event=${String(payload?.eventType ?? payload?.event)} id=${String(payload?.new?.id ?? payload?.old?.id)} oldEstado=${String(payload?.old?.estado)} newEstado=${String(payload?.new?.estado)} timestamp=${new Date().toISOString()}`);
             recargarContadorPendientes();
             // Si hay una mesa seleccionada, recargar su estado también
             if (mesaSeleccionada) {
@@ -994,9 +1002,31 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
                         }
                     }
 
-                    // Guardar opciones
-                    for (const opt of item.selectedOptions) {
-                        // Nota: Las opciones se guardarían aquí si se implementara la tabla items_opciones
+                    // Guardar opciones seleccionadas (filas hijas de items_opciones).
+                    // Solo DESPUÉS de tener el item_id del items_minicomanda recién creado.
+                    if (item.selectedOptions.length > 0) {
+                        await crearMultiplesOpciones(
+                            item.selectedOptions.map(opt => ({
+                                item_id: itemId,
+                                opcion_nombre: opt.optionName,
+                                choice_nombre: opt.choiceName,
+                                precio_extra: opt.extraPrice
+                            }))
+                        );
+                    }
+
+                    // Guardar extras seleccionados (filas hijas de item_extras).
+                    // nombre + precio son snapshot histórico; extra_id queda null
+                    // porque selectedExtras no conserva el id del catálogo.
+                    if (item.selectedExtras && item.selectedExtras.length > 0) {
+                        await crearMultiplesItemExtras(
+                            item.selectedExtras.map(ex => ({
+                                item_id: itemId,
+                                extra_id: null,
+                                nombre: ex.nombre,
+                                precio: ex.precio
+                            }))
+                        );
                     }
                 }
             }
@@ -1038,23 +1068,28 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
         }
     };
 
-    // Actualizar estado de minicomanda
+    // Actualizar estado de minicomanda (UPDATE parcial por intención C3:
+    // solo escribe `estado` + `fecha_entrega` cuando corresponde; nunca
+    // reenvía `cuenta_id` ni el resto del snapshot para no revertir
+    // movimientos concurrentes de cuenta).
     const actualizarEstadoMinicomanda = async (minicomandaId: number, estado: MinicomandaEstado) => {
         try {
-            // Obtener minicomanda actual
+            // Lectura solo para trazabilidad (estadoAnterior en el log); la
+            // escritura parcial no utiliza ningún campo del snapshot.
             const minicomanda = await obtenerMinicomandaPorId(minicomandaId);
             if (minicomanda) {
-                minicomanda.estado = estado;
-                if (estado === 'LISTO' || estado === 'ENTREGADO') {
-                    minicomanda.fecha_entrega = new Date().toISOString();
-                }
-                await actualizarMinicomanda(minicomanda);
+                const estadoAnterior = minicomanda.estado;
+                // [KDS-TRACE] Instrumentación temporal de diagnóstico — solo observa, no altera lógica.
+                console.log(`[KDS-TRACE] DB_UPDATE_START id=${String(minicomandaId)} estadoAnterior=${String(estadoAnterior)} estadoNuevo=${String(estado)} timestamp=${new Date().toISOString()}`);
+                await actualizarEstadoMinicomandaParcial(minicomandaId, estado);
+                console.log(`[KDS-TRACE] DB_UPDATE_SUCCESS id=${String(minicomandaId)} estadoNuevo=${String(estado)} timestamp=${new Date().toISOString()}`);
             }
             await recargarEstadoMesa();
 
             // Realtime se encarga de notificar a otros dispositivos automáticamente
             recargarContadorPendientes();
         } catch (error) {
+            console.log(`[KDS-TRACE] DB_UPDATE_ERROR id=${String(minicomandaId)} error=${String(error)} timestamp=${new Date().toISOString()}`);
             console.error('Error al actualizar estado de minicomanda:', error);
         }
     };
@@ -1070,6 +1105,10 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     // Cobrar cuenta
     const cobrarCuenta = async (totalPagado: number, cambio: number, metodoPago: MetodoPago, referencia?: string): Promise<CobroResultado | null> => {
+        throw new Error(
+            'DEPRECATED (C9.12): cobrarCuenta es ruta legacy sin garantías C9.7. ' +
+            'Usar cobrarAsientos (RPC cobrar_asientos).'
+        );
         if (!mesaSeleccionada || !cuentaActual) {
             alert('Error: No hay cuenta activa');
             return null;
@@ -1162,165 +1201,144 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
         }
     };
 
-    // Cobrar uno o varios comensales (asientos) de la mesa independientemente de
-    // cómo estén divididas las cuentas. Elimina únicamente los ítems de los asientos
-    // seleccionados y recalcula el total de cada cuenta.
+    // Cobrar uno o varios comensales (asientos) via RPC atomica C9.
+    // Camino economico unico: supabase.rpc('cobrar_asientos'). FAIL CLOSED:
+    // sin ruta local si Supabase falla.
     const cobrarAsientos = async (
         seatNumbers: number[],
         totalPagado: number,
         cambio: number,
         metodoPago: MetodoPago,
-        referencia?: string
+        referencia: string | undefined,
+        idempotencyKey: string
     ): Promise<CobroResultado | null> => {
         if (!mesaSeleccionada || !cuentaActual || seatNumbers.length === 0) {
             alert('Error: No hay cuenta activa o asientos seleccionados');
+            return null;
+        }
+        if (!meseroLogueado) {
+            alert('Error: No hay mesero autenticado');
+            return null;
+        }
+        // C9.12 Fase 1.5: la idempotency_key la genera el caller UNA vez por
+        // operacion de cobro y se reutiliza en reintentos (incluido retry
+        // manual tras timeout). Aqui NO se genera ni se regenera: recibir una
+        // key vacia es FAIL CLOSED, nunca se inventa una nueva.
+        if (!idempotencyKey) {
+            console.error('Error al cobrar asientos: falta idempotencyKey del caller (FAIL CLOSED)');
+            alert('Error al cobrar: falta la clave de la operación. No se aplicó ningún cobro.');
             return null;
         }
 
         try {
             // Capturar datos antes de limpiar el estado
             const mesaNumero = mesaSeleccionada.numero;
+            const mesaId = mesaSeleccionada.id;
+            const meseroId = meseroLogueado.id === 0 ? 999 : meseroLogueado.id;
 
-            if (referencia) {
-                await supabase.from('cuentas').update({ notas: `Ref: ${referencia}` }).eq('id', cuentaActual.id);
+            if (!isSupabaseConfigured()) {
+                console.error('Error al cobrar asientos: Supabase no configurado (FAIL CLOSED)');
+                alert('Error al cobrar: servicio no disponible. No se aplicó ningún cobro.');
+                return null;
             }
 
-            // Obtener todas las cuentas abiertas de la mesa y TODOS sus ítems
-            const cuentas = await obtenerCuentasAbiertasPorMesa(mesaSeleccionada.id);
-            let todosLosItems: any[] = [];
-            for (const c of cuentas) {
-                const minis = await obtenerMinicomandasPorCuenta(c.id);
-                const minisActivas = minis.filter(m => m.estado !== 'DEVUELTA');
-                for (const m of minisActivas) {
-                    const items = await obtenerItemsPorMinicomanda(m.id);
-                    todosLosItems.push(...items);
-                }
-            }
-
-            // Mapa minicomanda -> cuenta para acumular el monto real al cerrar
-            const miniCuentaPorId = new Map<number, number>();
-            for (const c of cuentas) {
-                const minis = await obtenerMinicomandasPorCuenta(c.id);
-                for (const m of minis) miniCuentaPorId.set(m.id, c.id);
-            }
-
-            // Procesar SOLO los ítems de los asientos seleccionados.
-            //  - Ítem normal: se elimina.
-            //  - Ítem compartido: NO se elimina; se marca como pagado el share
-            //    del comensal seleccionado (la resolución de la porción pendiente
-            //    ya se hizo antes en la UI mediante el diálogo de resolución).
-            // Registrar los montos efectivamente cobrados por cuenta (evita que el
-            // cierre guarde 0 y se pierda el total para el corte de caja)
-            const cobradoPorCuenta: Record<number, number> = {};
-            const sumarCobro = (cuentaId: number, monto: number) => {
-                if (monto <= 0) return;
-                cobradoPorCuenta[cuentaId] = (cobradoPorCuenta[cuentaId] || 0) + monto;
-            };
-
-            for (const it of todosLosItems) {
-                const cuentaIdItem = miniCuentaPorId.get(it.minicomanda_id);
-                const esCompartido = it.seat_number === null;
-                if (!esCompartido) {
-                    if (seatNumbers.includes(it.seat_number || 1)) {
-                        if (cuentaIdItem) sumarCobro(cuentaIdItem, it.total_item || 0);
-                        await eliminarItemMinicomanda(it.id);
-                    }
-                    continue;
-                }
-                // Ítem compartido: marcar como pagado los shares de los asientos cobrados
-                const shares = await obtenerSharesPorItem(it.id);
-                let pagoCompartido = 0;
-                for (const share of shares) {
-                    if (seatNumbers.includes(share.seat_number) && !share.pagado) {
-                        await marcarSharePagado(share.id, true);
-                        pagoCompartido += share.monto || 0;
-                    }
-                }
-                if (cuentaIdItem) sumarCobro(cuentaIdItem, pagoCompartido);
-            }
-
-            // Recalcular total de cada cuenta ignorando ítems compartidos liquidados;
-            // cerrar las cuentas que quedaron sin consumo activo.
-            for (const c of cuentas) {
-                const minis = await obtenerMinicomandasPorCuenta(c.id);
-                let totalCuenta = 0;
-                let tieneActivo = false;
-                for (const m of minis) {
-                    const items = await obtenerItemsPorMinicomanda(m.id);
-                    for (const it of items) {
-                        if (it.seat_number === null) {
-                            const liquidado = await itemCompartidoLiquidado(it.id);
-                            if (liquidado) continue;
-                        }
-                        totalCuenta += it.total_item;
-                        tieneActivo = true;
-                    }
-                }
-                if (!tieneActivo) {
-                    const montoCierre = cobradoPorCuenta[c.id] ?? totalCuenta ?? 0;
-                    await cerrarCuenta(c.id, montoCierre, 0, metodoPago);
-                } else {
-                    await actualizarCuenta({ ...c, total_acumulado: totalCuenta });
-                }
-            }
-
-            // Historial
-            await crearHistorialAccion({
-                cuenta_id: cuentaActual.id,
-                mesa_id: mesaSeleccionada.id,
-                mesero_id: meseroLogueado!.id,
-                accion: 'COBRAR_ASIENTOS',
-                descripcion: `Cobro de asiento(s) ${seatNumbers.join(', ')} por ${meseroLogueado!.nombre}. Total: $${totalPagado.toFixed(2)}, Cambio: $${cambio.toFixed(2)}, Método: ${metodoPago}${referencia ? `, Ref: ${referencia}` : ''}`,
-                monto: totalPagado
+            const { data, error } = await supabase.rpc('cobrar_asientos', {
+                p_mesa_id: mesaId,
+                p_seat_numbers: seatNumbers,
+                p_total_recibido: totalPagado,
+                p_cambio: cambio,
+                p_metodo_pago: metodoPago,
+                p_referencia: referencia ?? null,
+                p_mesero_id: meseroId,
+                p_idempotency_key: idempotencyKey
             });
 
-            const cuentasRestantes = await obtenerCuentasAbiertasPorMesa(mesaSeleccionada.id);
-            setCuentasAbiertas(cuentasRestantes);
+            if (error) {
+                console.error('Error al cobrar asientos:', error);
+                const codigo = (error as { code?: string }).code ?? '';
+                const mensaje = (error as { message?: string }).message ?? '';
+                const texto = `${codigo} ${mensaje}`;
+                if (texto.includes('C9001') || texto.includes('DUPLICATE_KEY_CONFLICT')) {
+                    alert('Error de cobro (DUPLICATE_KEY_CONFLICT): la clave de este intento ya se usó con parámetros distintos. No se aplicó ningún cobro adicional.');
+                } else if (texto.includes('C9002') || texto.includes('SHARE_HUERFANO')) {
+                    alert('No se pudo cobrar: hay un ítem compartido sin reparto válido. Revisa la cuenta antes de reintentar. No se aplicó ningún cobro.');
+                } else if (texto.includes('C9003')) {
+                    alert(`No se pudo cobrar: ${mensaje}`);
+                } else {
+                    alert('Error al cobrar');
+                }
+                return null;
+            }
 
-            if (cuentasRestantes.length === 0) {
-                // Mesa liberada para nuevos clientes
-                await actualizarEstadoMesa(mesaSeleccionada.id, 'LIBRE');
-                const { error: errLiberarMesa } = await supabase.from('mesas').update({ mesero_activo_id: null }).eq('id', mesaSeleccionada.id);
-            if (errLiberarMesa) console.error('No se pudo liberar el mesero activo de la mesa:', errLiberarMesa.message);
-                setMesaSeleccionada(null);
-                setEstadoMesa(null);
-                setCuentaActual(null);
-                setMinicomandas([]);
-                setCarroLocal([]);
-                setCuentasAbiertas([]);
-                setCuentaActivaIndex(0);
-                setMesas(prev => prev.map(m => m.id === mesaSeleccionada.id ? { ...m, estado: 'LIBRE', mesero_activo_id: undefined } : m));
-                await cargarMesas();
-                return {
+            const crudo: unknown = Array.isArray(data) ? (data as unknown[])[0] : data;
+            const resultado = crudo as {
+                status?: string;
+                recibido?: number;
+                cambio?: number;
+                mesa_liberada?: boolean;
+                pendientes_restantes?: number;
+            } | null;
+
+            if (!resultado || typeof resultado.status !== 'string') {
+                console.error('Error al cobrar asientos: respuesta inesperada del RPC', data);
+                alert('Error al cobrar');
+                return null;
+            }
+
+            if (resultado.status === 'COBRADO' || resultado.status === 'YA_PROCESADO') {
+                const mesaLiberada = resultado.mesa_liberada === true;
+                const pendientesRestantes = Number(resultado.pendientes_restantes ?? 0);
+                const recibido = Number(resultado.recibido);
+                const cambioRpc = Number(resultado.cambio);
+                const cobro: CobroResultado = {
                     mesaNumero,
-                    totalPagado,
-                    cambio,
+                    totalPagado: recibido,
+                    cambio: cambioRpc,
                     metodoPago,
                     referencia,
                     tipo: 'asientos',
-                    asientosCobrados: seatNumbers,
-                    mesaLiberada: true,
-                    pendientesRestantes: 0
+                    mesaLiberada,
+                    pendientesRestantes,
+                    asientosCobrados: seatNumbers
                 };
+
+                if (mesaLiberada) {
+                    setMesaSeleccionada(null);
+                    setEstadoMesa(null);
+                    setCuentaActual(null);
+                    setMinicomandas([]);
+                    setCarroLocal([]);
+                    setCuentasAbiertas([]);
+                    setCuentaActivaIndex(0);
+                    setMesas(prev => prev.map(m => m.id === mesaId ? { ...m, estado: 'LIBRE', mesero_activo_id: undefined } : m));
+                    await cargarMesas();
+                    return cobro;
+                }
+
+                // La mesa sigue activa: refresco de UI por lectura (sin aplicar dinero).
+                const restantes = await obtenerCuentasAbiertasPorMesa(mesaId);
+                setCuentasAbiertas(restantes);
+                if (restantes.length > 0) {
+                    const siguiente = restantes[0];
+                    setCuentaActual(siguiente);
+                    const minisSiguiente = await obtenerMinicomandasPorCuenta(siguiente.id);
+                    setMinicomandas(minisSiguiente);
+                    setCuentaActivaIndex(0);
+                } else {
+                    await recargarEstadoMesa();
+                }
+                return cobro;
             }
 
-            // La mesa sigue ocupada: dejar la primera cuenta restante como activa
-            const siguiente = cuentasRestantes[0];
-            setCuentaActual(siguiente);
-            const minisSiguiente = await obtenerMinicomandasPorCuenta(siguiente.id);
-            setMinicomandas(minisSiguiente);
-            setCuentaActivaIndex(0);
-            return {
-                mesaNumero,
-                totalPagado,
-                cambio,
-                metodoPago,
-                referencia,
-                tipo: 'asientos',
-                asientosCobrados: seatNumbers,
-                mesaLiberada: false,
-                pendientesRestantes: cuentasRestantes.length
-            };
+            if (resultado.status === 'SIN_CAMBIOS') {
+                await recargarEstadoMesa();
+                alert('No había nada pendiente por cobrar para los asientos seleccionados.');
+                return null;
+            }
+
+            console.error('Error al cobrar asientos: estado no reconocido', resultado.status);
+            alert('Error al cobrar');
+            return null;
         } catch (error) {
             console.error('Error al cobrar asientos:', error);
             alert('Error al cobrar');
@@ -1332,7 +1350,98 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
     // Opciones:
     //   'pasar'     -> transferir la porción a otro comensal (destino)
     //   'repartir'  -> repartir la porción entre los demás comensales que siguen
-    //   'completa'  -> el comensal que se va paga el ítem completo (se liquida)
+    //   'completa'  -> el comensal absorbe toda la responsabilidad pendiente
+    //                   (se reasigna, nunca se marca deuda ajena como pagada)
+    // Distribución exacta en centavos con convención determinista de negocio:
+    // el residuo se reparte de a 1¢ entre las ÚLTIMAS `resto` partes, es decir,
+    // la parte i recibe base+1 solo si i >= n - resto. Así:
+    //   95/2  -> [4750, 4750]  ($47.50 / $47.50)
+    //   95/3  -> [3166, 3167, 3167]  ($31.66 / $31.67 / $31.67)
+    //   100/3 -> [3333, 3333, 3334]  ($33.33 / $33.33 / $33.34)
+    // Difiere deliberadamente de repartirExacto de WaiterView (todo el residuo
+    // al último índice: 95/3 -> [3166,3166,3168]) y de montosExactos (requiere
+    // porcentajes y también absorbe en el último); ninguna de esas lógicas
+    // existentes puede producir el triple mandado sin modificarse globalmente
+    // (prohibido). Implementado aquí porque AccountContext no puede importar
+    // del componente sin crear dependencia circular.
+    const repartirCentavosExactos = (totalCents: number, n: number): number[] => {
+        if (n <= 0) return [];
+        const base = Math.floor(totalCents / n);
+        const resto = totalCents - base * n;
+        return Array.from({ length: n }, (_, i) => base + (i >= n - resto ? 1 : 0));
+    };
+
+    // Porcentajes exactos en centésimas para un conjunto de montos (centavos) cuya
+    // suma es totalCents. El último absorbe el residuo para sumar 100.00% siempre.
+    const porcentajesExactos = (montosCents: number[], totalCents: number): number[] => {
+        if (totalCents <= 0 || montosCents.length === 0) return montosCents.map(() => 0);
+        const partes = montosCents.map(m => Math.floor((m * 10000) / totalCents));
+        const suma = partes.reduce((s, p) => s + p, 0);
+        partes[partes.length - 1] += 10000 - suma;
+        return partes.map(p => p / 100);
+    };
+
+    // Relee los shares y verifica Σ montos == total_item (en centavos).
+    // Detecta estados parcialmente modificados tras una operación de BD.
+    const validarIntegridadShares = async (itemId: number, totalItem: number): Promise<void> => {
+        const rows = await obtenerSharesPorItem(itemId);
+        const suma = rows.reduce((s: number, r: any) => s + Math.round(Number(r.monto) * 100), 0);
+        if (suma !== Math.round(Number(totalItem) * 100)) {
+            throw new Error(`Integridad de reparto rota en item ${itemId}: shares suman ${suma} vs total ${Math.round(Number(totalItem) * 100)}`);
+        }
+    };
+
+    // Convierte un ítem individual en compartido durante el checkout:
+    // seat_number -> null + shares exactos (todas pagado=false).
+    // Orden fail-safe: si los INSERT fallan tras el UPDATE, el ítem queda huérfano
+    // y el checkout lo bloquea ("Participación no disponible"); nunca se cobra de más.
+    const compartirItemIndividual = async (
+        itemId: number,
+        reparto: { seat: number; porcentaje: number; monto: number }[]
+    ): Promise<void> => {
+        try {
+            const item = await obtenerItemMinicomandaPorId(itemId);
+            if (!item) {
+                alert('Ítem no encontrado');
+                return;
+            }
+            if (item.seat_number === null) {
+                alert('El ítem ya está compartido');
+                return;
+            }
+            const existentes = await obtenerSharesPorItem(itemId);
+            if (existentes.length > 0) {
+                alert('El ítem ya tiene participaciones registradas');
+                return;
+            }
+            if (!reparto || reparto.length < 2) {
+                alert('Selecciona al menos 2 comensales para compartir');
+                return;
+            }
+            const totalCents = Math.round(Number(item.total_item) * 100);
+            const sumaCents = reparto.reduce((s, r) => s + Math.round(Number(r.monto) * 100), 0);
+            if (sumaCents !== totalCents) {
+                alert('El reparto no suma el total del platillo');
+                return;
+            }
+            await actualizarItemMinicomanda({ ...item, seat_number: null });
+            for (const r of reparto) {
+                await crearItemComensalShare({
+                    item_id: itemId,
+                    seat_number: r.seat,
+                    porcentaje: Number(r.porcentaje),
+                    monto: Number(r.monto),
+                    pagado: false
+                });
+            }
+            await validarIntegridadShares(itemId, item.total_item);
+            await recargarEstadoMesa();
+        } catch (error) {
+            console.error('Error al compartir el platillo:', error);
+            alert('No se pudo compartir el platillo. Revisa la cuenta antes de cobrar.');
+        }
+    };
+
     const resolverSalidaComensal = async (
         itemId: number,
         asientoSale: number,
@@ -1341,56 +1450,96 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
         asientosRestantes?: number[]
     ): Promise<void> => {
         try {
+            const item = await obtenerItemMinicomandaPorId(itemId);
+            if (!item) return;
             const shares = await obtenerSharesPorItem(itemId);
             const shareSale = shares.find(s => s.seat_number === asientoSale && !s.pagado);
-            if (!shareSale) return; // ya estaba pagado
+            // Sin porción pendiente del que sale (ya pagada o inexistente): no-op
+            // controlado. Nunca se transfiere ni se revive dinero liquidado.
+            if (!shareSale) return;
 
-            if (decision === 'completa') {
-                // El comensal que se va paga TODO el ítem: liquidar todos los shares
-                for (const s of shares) {
-                    await marcarSharePagado(s.id, true);
-                }
-                return;
-            }
+            const totalCents = Math.round(Number(item.total_item) * 100);
 
             if (decision === 'pasar' && destino) {
-                // Transferir la porción al comensal destino
+                // Transferir únicamente la porción pendiente: cambia el responsable,
+                // conserva monto, porcentaje y estado. Σ e invariantes intactos.
                 await actualizarShare({ ...shareSale, seat_number: destino });
+                await validarIntegridadShares(itemId, item.total_item);
                 return;
             }
 
             if (decision === 'repartir') {
-                // Quitar la porción del comensal que se va y redistribuir entre los demás
+                // La porción pendiente del que sale se distribuye entre los demás
+                // DEUDORES: asientos con deuda impaga (se excluye al que sale, a
+                // los ya liquidados y a quienes nunca participaron: no se crea
+                // deuda fantasma ni se reabre deuda pagada).
+                // Las filas pagadas (suyas o ajenas) y los montos ajenos NO se tocan.
                 const otros = (asientosRestantes || shares.map(s => s.seat_number))
                     .filter(s => s !== asientoSale);
-                const n = otros.length;
-                if (n === 0) {
-                    // No quedan otros comensales -> liquidar (lo paga el que se va)
-                    for (const s of shares) await marcarSharePagado(s.id, true);
-                    return;
+                const deudores = otros.filter(seat => shares.some(s => s.seat_number === seat && !s.pagado));
+                // Sin destinatarios válidos: no-op. Nunca una redistribución destructiva.
+                if (deudores.length === 0) return;
+                const montoSaleCents = Math.round(Number(shareSale.monto) * 100);
+                const partes = repartirCentavosExactos(montoSaleCents, deudores.length);
+                // Nuevo conjunto: se conservan pagadas e impagas ajenas; la parte del
+                // que sale se suma a la fila impaga de cada deudor (siempre existe).
+                // Una sola fila impaga por asiento.
+                const filas: { seat: number; montoCents: number; pagado: boolean }[] = [];
+                for (const s of shares) {
+                    if (s.seat_number === asientoSale && !s.pagado) continue; // sale su parte
+                    filas.push({ seat: s.seat_number, montoCents: Math.round(Number(s.monto) * 100), pagado: s.pagado });
                 }
-                // Eliminar el share del que se va
-                await eliminarSharesPorItem(itemId); // borra todos y recrea
-                // Reconstruir: mantener shares existentes (pagados) y repartir el resto equitativamente
-                const sharesRestantes = (await obtenerSharesPorItem(itemId)).filter(s => s.seat_number !== asientoSale);
-                const pagados = sharesRestantes.filter(s => s.pagado);
-                const nuevosAsientos = [...otros];
-                const pctPorAsiento = 100 / nuevosAsientos.length;
-                let nuevos = nuevosAsientos.map(seat => ({
-                    item_id: itemId,
-                    seat_number: seat,
-                    porcentaje: Number(pctPorAsiento.toFixed(2)),
-                    monto: Number((shareSale.monto / n).toFixed(2)),
-                    pagado: false
-                }));
-                // Recrear shares (pagados + nuevos)
-                for (const s of pagados) await crearItemComensalShare(s);
-                for (const s of nuevos) await crearItemComensalShare(s);
+                deudores.forEach((seat, i) => {
+                    const ex = filas.find(f => f.seat === seat && !f.pagado);
+                    if (ex) ex.montoCents += partes[i];
+                });
+                const pcts = porcentajesExactos(filas.map(f => f.montoCents), totalCents);
+                await eliminarSharesPorItem(itemId);
+                for (let i = 0; i < filas.length; i++) {
+                    await crearItemComensalShare({
+                        item_id: itemId,
+                        seat_number: filas[i].seat,
+                        porcentaje: pcts[i],
+                        monto: filas[i].montoCents / 100,
+                        pagado: filas[i].pagado
+                    });
+                }
+                await validarIntegridadShares(itemId, item.total_item);
+                return;
+            }
+
+            if (decision === 'completa') {
+                // Absorción real: toda la responsabilidad PENDIENTE del platillo se
+                // reasigna al comensal, que la pagará en el checkout. Nunca se marca
+                // deuda ajena como pagada sin cobrarla.
+                const impagas = shares.filter(s => !s.pagado);
+                const montoAbsCents = impagas.reduce((s: number, r: any) => s + Math.round(Number(r.monto) * 100), 0);
+                if (montoAbsCents <= 0) return; // nada pendiente: no-op
+                // Nuevo conjunto: pagadas intactas + una sola fila impaga del
+                // absorbente con todo lo pendiente; impagas ajenas eliminadas.
+                const filas: { seat: number; montoCents: number; pagado: boolean }[] = [];
+                for (const s of shares) {
+                    if (!s.pagado) continue;
+                    filas.push({ seat: s.seat_number, montoCents: Math.round(Number(s.monto) * 100), pagado: true });
+                }
+                filas.push({ seat: asientoSale, montoCents: montoAbsCents, pagado: false });
+                const pcts = porcentajesExactos(filas.map(f => f.montoCents), totalCents);
+                await eliminarSharesPorItem(itemId);
+                for (let i = 0; i < filas.length; i++) {
+                    await crearItemComensalShare({
+                        item_id: itemId,
+                        seat_number: filas[i].seat,
+                        porcentaje: pcts[i],
+                        monto: filas[i].montoCents / 100,
+                        pagado: filas[i].pagado
+                    });
+                }
+                await validarIntegridadShares(itemId, item.total_item);
                 return;
             }
         } catch (error) {
             console.error('Error al resolver salida de comensal:', error);
-            alert('Error al resolver la porción del ítem compartido');
+            alert('Error al resolver la porción del ítem compartido. Revisa la cuenta antes de cobrar.');
         }
     };
 
@@ -1539,10 +1688,11 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
                 await actualizarCuenta({ ...cuentaDestino, total_acumulado: totalDest });
             }
 
-            // Si la minicomanda de origen quedó vacía, cerrarla
+            // Si la minicomanda de origen quedó vacía, cerrarla (UPDATE parcial:
+            // solo `estado` + `fecha_entrega`; no reenviar el snapshot).
             const itemsOrigen = await obtenerItemsPorMinicomanda(item.minicomanda_id);
             if (itemsOrigen.length === 0) {
-                await actualizarMinicomanda({ ...minicomandaActual!, estado: 'ENTREGADO' });
+                await actualizarEstadoMinicomandaParcial(minicomandaActual!.id, 'ENTREGADO');
             }
 
             await recargarEstadoMesa();
@@ -1590,12 +1740,13 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
                 const nuevaCuentaId = await crearCuenta(nuevaCuenta);
 
                 // Mover todas las minicomandas de ese asiento a la nueva cuenta
+                // (UPDATE parcial: solo `cuenta_id`, sin reenviar el snapshot).
                 const minis = await obtenerMinicomandasPorCuenta(cuentaActual.id);
                 for (const mini of minis) {
                     const itemsMini = await obtenerItemsPorMinicomanda(mini.id);
                     const perteneceAlAsiento = itemsMini.some(it => (it.seat_number || 1) === seat);
                     if (perteneceAlAsiento) {
-                        await actualizarMinicomanda({ ...mini, cuenta_id: nuevaCuentaId });
+                        await actualizarCuentaDeMinicomanda(mini.id, nuevaCuentaId);
                     }
                 }
 
@@ -1646,10 +1797,11 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             }
 
             // Mover todas las minicomandas de las cuentas a combinar hacia la destino
+            // (UPDATE parcial: solo `cuenta_id`, sin reenviar el snapshot).
             for (const id of otrasCuentas) {
                 const minis = await obtenerMinicomandasPorCuenta(id);
                 for (const mini of minis) {
-                    await actualizarMinicomanda({ ...mini, cuenta_id: cuentaDestinoId });
+                    await actualizarCuentaDeMinicomanda(mini.id, cuentaDestinoId);
                 }
             }
 
@@ -1764,6 +1916,7 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             cobrarCuenta,
             cobrarAsientos,
             resolverSalidaComensal,
+            compartirItemIndividual,
             actualizarRepartoItem,
             obtenerSharesPorItem,
             verHistorial,

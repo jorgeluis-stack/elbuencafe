@@ -12,6 +12,7 @@ import {
     ItemMinicomanda,
     ItemComensalShare,
     ItemOpcion,
+    ItemExtra,
     HistorialAccion,
     CarroItem,
     Producto,
@@ -74,6 +75,17 @@ export const obtenerMesaPorId = async (id: number): Promise<Mesa | undefined> =>
         throw new Error(`Error al obtener mesa: ${error.message}`);
     }
     return data as Mesa;
+};
+
+export const obtenerMesasPorIds = async (ids: number[]): Promise<Mesa[]> => {
+    if (ids.length === 0) return [];
+    const { data, error } = await supabase
+        .from('mesas')
+        .select('*')
+        .in('id', ids);
+
+    if (error) throw new Error(`Error al obtener mesas por ids: ${error.message}`);
+    return data as Mesa[];
 };
 
 export const obtenerMesaPorNumero = async (numero: string): Promise<Mesa | undefined> => {
@@ -445,6 +457,45 @@ export const actualizarMinicomanda = async (minicomanda: Minicomanda): Promise<v
     if (error) throw new Error(`Error al actualizar minicomanda: ${error.message}`);
 };
 
+// Actualización parcial por intención: mover una minicomanda de cuenta.
+// Solo escribe `cuenta_id`; nunca reenvía `estado` ni el resto del snapshot,
+// para no revertir transiciones concurrentes de cocina (Lost Update cruzado C3).
+export const actualizarCuentaDeMinicomanda = async (
+    minicomandaId: number,
+    cuentaId: number
+): Promise<void> => {
+    const { error } = await supabase
+        .from('minicomandas')
+        .update({ cuenta_id: cuentaId })
+        .eq('id', minicomandaId);
+
+    if (error) throw new Error(`Error al actualizar cuenta de minicomanda: ${error.message}`);
+};
+
+// Actualización parcial por intención: cambiar solo el estado (y fecha_entrega
+// cuando corresponda). Preserva la semántica existente: LISTO/ENTREGADO sellan
+// fecha_entrega con el timestamp actual; el resto de transiciones no tocan
+// fecha_entrega ni ninguna otra columna del snapshot.
+export const actualizarEstadoMinicomandaParcial = async (
+    minicomandaId: number,
+    estado: Minicomanda['estado'],
+    fechaEntrega?: string
+): Promise<void> => {
+    const cambios: Record<string, unknown> = { estado };
+    if (fechaEntrega !== undefined) {
+        cambios.fecha_entrega = fechaEntrega;
+    } else if (estado === 'LISTO' || estado === 'ENTREGADO') {
+        cambios.fecha_entrega = new Date().toISOString();
+    }
+
+    const { error } = await supabase
+        .from('minicomandas')
+        .update(cambios)
+        .eq('id', minicomandaId);
+
+    if (error) throw new Error(`Error al actualizar estado de minicomanda: ${error.message}`);
+};
+
 export const marcarMinicomandaComoListo = async (minicomandaId: number): Promise<void> => {
     const { error } = await supabase
         .from('minicomandas')
@@ -494,6 +545,17 @@ export const obtenerItemsPorMinicomanda = async (minicomandaId: number): Promise
     return data as ItemMinicomanda[];
 };
 
+export const obtenerItemsPorMinicomandas = async (ids: number[]): Promise<ItemMinicomanda[]> => {
+    if (ids.length === 0) return [];
+    const { data, error } = await supabase
+        .from('items_minicomanda')
+        .select('*')
+        .in('minicomanda_id', ids);
+
+    if (error) throw new Error(`Error al obtener items por minicomandas: ${error.message}`);
+    return data as ItemMinicomanda[];
+};
+
 export const crearItemMinicomanda = async (item: Omit<ItemMinicomanda, 'id'>): Promise<number> => {
     const { data, error } = await supabase
         .from('items_minicomanda')
@@ -538,13 +600,15 @@ export const moverItemACuenta = async (
     if (error) throw new Error(`Error al mover item de minicomanda: ${error.message}`);
 };
 
-export const eliminarItemMinicomanda = async (id: number): Promise<void> => {
-    const { error } = await supabase
+export const eliminarItemMinicomanda = async (id: number): Promise<boolean> => {
+    const { data, error } = await supabase
         .from('items_minicomanda')
         .delete()
-        .eq('id', id);
+        .eq('id', id)
+        .select('id');
 
     if (error) throw new Error(`Error al eliminar item: ${error.message}`);
+    return (data?.length ?? 0) > 0;
 };
 
 // ============================================================================
@@ -599,12 +663,15 @@ export const actualizarShare = async (share: ItemComensalShare): Promise<void> =
     if (error) throw new Error(`Error al actualizar share: ${error.message}`);
 };
 
-export const marcarSharePagado = async (shareId: number, pagado: boolean): Promise<void> => {
-    const { error } = await supabase
+export const marcarSharePagado = async (shareId: number, pagado: boolean): Promise<boolean> => {
+    const { data, error } = await supabase
         .from('item_comensal_share')
         .update({ pagado })
-        .eq('id', shareId);
+        .eq('id', shareId)
+        .eq('pagado', false)
+        .select('id');
     if (error) throw new Error(`Error al marcar share: ${error.message}`);
+    return (data?.length ?? 0) > 0;
 };
 
 export const eliminarSharesPorItem = async (itemId: number): Promise<void> => {
@@ -678,6 +745,17 @@ export const obtenerOpcionesPorItem = async (itemId: number): Promise<ItemOpcion
     return data as ItemOpcion[];
 };
 
+export const obtenerOpcionesPorItems = async (ids: number[]): Promise<ItemOpcion[]> => {
+    if (ids.length === 0) return [];
+    const { data, error } = await supabase
+        .from('items_opciones')
+        .select('*')
+        .in('item_id', ids);
+
+    if (error) throw new Error(`Error al obtener opciones por items: ${error.message}`);
+    return data as ItemOpcion[];
+};
+
 export const crearOpcion = async (opcion: Omit<ItemOpcion, 'id'>): Promise<number> => {
     const { data, error } = await supabase
         .from('items_opciones')
@@ -696,6 +774,61 @@ export const crearMultiplesOpciones = async (opciones: Omit<ItemOpcion, 'id'>[])
         .select('id');
 
     if (error) throw new Error(`Error al crear opciones: ${error.message}`);
+    return data.map((row: { id: number }) => row.id);
+};
+
+// ============================================================================
+// FUNCIONES DE EXTRAS POR ÍTEM (item_extras — snapshot nombre+precio)
+// ============================================================================
+
+export const obtenerTodosLosItemExtras = async (): Promise<ItemExtra[]> => {
+    const { data, error } = await supabase
+        .from('item_extras')
+        .select('*');
+
+    if (error) throw new Error(`Error al obtener extras de items: ${error.message}`);
+    return data as ItemExtra[];
+};
+
+export const obtenerExtrasPorItem = async (itemId: number): Promise<ItemExtra[]> => {
+    const { data, error } = await supabase
+        .from('item_extras')
+        .select('*')
+        .eq('item_id', itemId);
+
+    if (error) throw new Error(`Error al obtener extras por item: ${error.message}`);
+    return data as ItemExtra[];
+};
+
+export const obtenerExtrasPorItems = async (ids: number[]): Promise<ItemExtra[]> => {
+    if (ids.length === 0) return [];
+    const { data, error } = await supabase
+        .from('item_extras')
+        .select('*')
+        .in('item_id', ids);
+
+    if (error) throw new Error(`Error al obtener extras por items: ${error.message}`);
+    return data as ItemExtra[];
+};
+
+export const crearItemExtra = async (extra: Omit<ItemExtra, 'id'>): Promise<number> => {
+    const { data, error } = await supabase
+        .from('item_extras')
+        .insert(extra)
+        .select('id')
+        .single();
+
+    if (error) throw new Error(`Error al crear extra de item: ${error.message}`);
+    return data.id;
+};
+
+export const crearMultiplesItemExtras = async (extras: Omit<ItemExtra, 'id'>[]): Promise<number[]> => {
+    const { data, error } = await supabase
+        .from('item_extras')
+        .insert(extras)
+        .select('id');
+
+    if (error) throw new Error(`Error al crear extras de item: ${error.message}`);
     return data.map((row: { id: number }) => row.id);
 };
 
@@ -1216,13 +1349,23 @@ export type RealtimeEvent = 'INSERT' | 'UPDATE' | 'DELETE' | '*';
  * @param event - Tipo de evento a escuchar (default: '*')
  * @returns Función para cancelar la suscripción (unsubscribe)
  */
+// Contador para dar a cada suscripción un canal Realtime propio.
+// supabase.channel(nombre) devuelve la MISMA instancia si el nombre ya existe,
+// y llamar .on() sobre un canal ya suscrito lanza
+// "cannot add `postgres_changes` callbacks after `subscribe()`".
+// Como varios componentes se suscriben a la misma tabla
+// (p. ej. AccountContext + KitchenView → 'minicomandas'),
+// cada suscripción necesita un nombre de canal único.
+let realtimeChannelSeq = 0;
+
 export const suscribirACambios = (
     table: string,
     callback: (payload: { eventType: string; new: any; old: any }) => void,
     event: RealtimeEvent = '*'
 ): (() => void) => {
+    realtimeChannelSeq += 1;
     const channel = supabase
-        .channel(`${table}-realtime`)
+        .channel(`${table}-realtime-${realtimeChannelSeq}`)
         .on(
             'postgres_changes' as any,
             { event, schema: 'public', table },

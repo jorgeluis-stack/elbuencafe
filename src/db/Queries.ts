@@ -1,6 +1,6 @@
 // src/db/Queries.ts - Funciones CRUD para cada tabla
 
-import { Mesa, Mesero, Cuenta, SeatConfig, Minicomanda, ItemMinicomanda, ItemOpcion, HistorialAccion, CarroItem, Producto } from './Schema';
+import { Mesa, Mesero, Cuenta, SeatConfig, Minicomanda, ItemMinicomanda, ItemOpcion, ItemExtra, HistorialAccion, CarroItem, Producto } from './Schema';
 import { getAllRecords, getRecordById, addRecord, updateRecord, deleteRecord, getRecordsByIndex, openDB, closeDB } from './DB';
 
 // ==================== FUNCIONES DE MESAS ====================
@@ -11,6 +11,13 @@ export const obtenerTodasLasMesas = (): Promise<Mesa[]> => {
 
 export const obtenerMesaPorId = (id: number): Promise<Mesa | undefined> => {
     return getRecordById<Mesa>('mesas', id);
+};
+
+export const obtenerMesasPorIds = async (ids: number[]): Promise<Mesa[]> => {
+    if (ids.length === 0) return [];
+    const todas = await getAllRecords<Mesa>('mesas');
+    const set = new Set(ids);
+    return todas.filter(m => set.has(m.id));
 };
 
 export const obtenerMesaPorNumero = (numero: string): Promise<Mesa | undefined> => {
@@ -316,6 +323,91 @@ export const actualizarMinicomanda = (minicomanda: Minicomanda): Promise<void> =
     return updateRecord<Minicomanda>('minicomandas', minicomanda);
 };
 
+// Fallback local de actualizarCuentaDeMinicomanda: solo toca `cuenta_id`
+// (lectura + escritura ocurren dentro de la primitiva, sin snapshot del llamador).
+export const actualizarCuentaDeMinicomanda = (minicomandaId: number, cuentaId: number): Promise<void> => {
+    return new Promise((resolve, reject) => {
+        openDB().then(db => {
+            const transaction = db.transaction('minicomandas', 'readwrite');
+            const store = transaction.objectStore('minicomandas');
+            const request = store.get(minicomandaId);
+
+            request.onsuccess = () => {
+                const minicomanda = request.result as Minicomanda | undefined;
+                if (!minicomanda) {
+                    reject('Minicomanda no encontrada: ' + minicomandaId);
+                    closeDB(db);
+                    return;
+                }
+                minicomanda.cuenta_id = cuentaId;
+                const updateRequest = store.put(minicomanda);
+
+                updateRequest.onsuccess = () => {
+                    resolve();
+                    closeDB(db);
+                };
+
+                updateRequest.onerror = () => {
+                    reject('Error al actualizar cuenta de minicomanda: ' + updateRequest.error);
+                    closeDB(db);
+                };
+            };
+
+            request.onerror = () => {
+                reject('Error al obtener minicomanda: ' + request.error);
+                closeDB(db);
+            };
+        }).catch(reject);
+    });
+};
+
+// Fallback local de actualizarEstadoMinicomandaParcial: misma semántica que en
+// Supabase (LISTO/ENTREGADO sellan fecha_entrega; resto no la toca).
+export const actualizarEstadoMinicomandaParcial = (
+    minicomandaId: number,
+    estado: Minicomanda['estado'],
+    fechaEntrega?: string
+): Promise<void> => {
+    return new Promise((resolve, reject) => {
+        openDB().then(db => {
+            const transaction = db.transaction('minicomandas', 'readwrite');
+            const store = transaction.objectStore('minicomandas');
+            const request = store.get(minicomandaId);
+
+            request.onsuccess = () => {
+                const minicomanda = request.result as Minicomanda | undefined;
+                if (!minicomanda) {
+                    reject('Minicomanda no encontrada: ' + minicomandaId);
+                    closeDB(db);
+                    return;
+                }
+                minicomanda.estado = estado;
+                if (fechaEntrega !== undefined) {
+                    minicomanda.fecha_entrega = fechaEntrega;
+                } else if (estado === 'LISTO' || estado === 'ENTREGADO') {
+                    minicomanda.fecha_entrega = new Date().toISOString();
+                }
+                const updateRequest = store.put(minicomanda);
+
+                updateRequest.onsuccess = () => {
+                    resolve();
+                    closeDB(db);
+                };
+
+                updateRequest.onerror = () => {
+                    reject('Error al actualizar estado de minicomanda: ' + updateRequest.error);
+                    closeDB(db);
+                };
+            };
+
+            request.onerror = () => {
+                reject('Error al obtener minicomanda: ' + request.error);
+                closeDB(db);
+            };
+        }).catch(reject);
+    });
+};
+
 export const marcarMinicomandaComoListo = (minicomandaId: number): Promise<void> => {
     return new Promise((resolve, reject) => {
         openDB().then(db => {
@@ -363,6 +455,13 @@ export const obtenerItemsPorMinicomanda = (minicomandaId: number): Promise<ItemM
     return getRecordsByIndex<ItemMinicomanda>('items_minicomanda', 'minicomanda_id', minicomandaId);
 };
 
+export const obtenerItemsPorMinicomandas = async (ids: number[]): Promise<ItemMinicomanda[]> => {
+    if (ids.length === 0) return [];
+    const todas = await getAllRecords<ItemMinicomanda>('items_minicomanda');
+    const set = new Set(ids);
+    return todas.filter(i => set.has(i.minicomanda_id));
+};
+
 export const crearItemMinicomanda = (item: Omit<ItemMinicomanda, 'id'>): Promise<number> => {
     return addRecord<ItemMinicomanda>('items_minicomanda', item);
 };
@@ -371,8 +470,34 @@ export const actualizarItemMinicomanda = (item: ItemMinicomanda): Promise<void> 
     return updateRecord<ItemMinicomanda>('items_minicomanda', item);
 };
 
-export const eliminarItemMinicomanda = (id: number): Promise<void> => {
-    return deleteRecord<ItemMinicomanda>('items_minicomanda', id);
+export const eliminarItemMinicomanda = (id: number): Promise<boolean> => {
+    return new Promise((resolve, reject) => {
+        openDB().then(db => {
+            const transaction = db.transaction('items_minicomanda', 'readwrite');
+            const store = transaction.objectStore('items_minicomanda');
+            const lookup = store.get(id);
+            lookup.onsuccess = () => {
+                if (lookup.result === undefined) {
+                    resolve(false);
+                    closeDB(db);
+                    return;
+                }
+                const del = store.delete(id);
+                del.onsuccess = () => {
+                    resolve(true);
+                    closeDB(db);
+                };
+                del.onerror = () => {
+                    reject('Error al eliminar item: ' + del.error);
+                    closeDB(db);
+                };
+            };
+            lookup.onerror = () => {
+                reject('Error al obtener item: ' + lookup.error);
+                closeDB(db);
+            };
+        }).catch(reject);
+    });
 };
 
 // ==================== FUNCIONES DE ITEMS OPCIONES ====================
@@ -383,6 +508,13 @@ export const obtenerTodasLasOpciones = (): Promise<ItemOpcion[]> => {
 
 export const obtenerOpcionesPorItem = (itemId: number): Promise<ItemOpcion[]> => {
     return getRecordsByIndex<ItemOpcion>('items_opciones', 'item_id', itemId);
+};
+
+export const obtenerOpcionesPorItems = async (ids: number[]): Promise<ItemOpcion[]> => {
+    if (ids.length === 0) return [];
+    const todas = await getAllRecords<ItemOpcion>('items_opciones');
+    const set = new Set(ids);
+    return todas.filter(o => set.has(o.item_id));
 };
 
 export const crearOpcion = (opcion: Omit<ItemOpcion, 'id'>): Promise<number> => {
@@ -407,6 +539,62 @@ export const crearMultiplesOpciones = (opciones: Omit<ItemOpcion, 'id'>[]): Prom
                 };
                 request.onerror = () => {
                     reject('Error al agregar opción: ' + request.error);
+                    closeDB(db);
+                };
+            });
+
+            transaction.oncomplete = () => {
+                resolve(results);
+                closeDB(db);
+            };
+
+            transaction.onerror = () => {
+                reject('Error en transacción: ' + transaction.error);
+                closeDB(db);
+            };
+        }).catch(reject);
+    });
+};
+
+// ==================== FUNCIONES DE ITEM EXTRAS ====================
+
+export const obtenerTodosLosItemExtras = (): Promise<ItemExtra[]> => {
+    return getAllRecords<ItemExtra>('item_extras');
+};
+
+export const obtenerExtrasPorItem = (itemId: number): Promise<ItemExtra[]> => {
+    return getRecordsByIndex<ItemExtra>('item_extras', 'item_id', itemId);
+};
+
+export const obtenerExtrasPorItems = async (ids: number[]): Promise<ItemExtra[]> => {
+    if (ids.length === 0) return [];
+    const todas = await getAllRecords<ItemExtra>('item_extras');
+    const set = new Set(ids);
+    return todas.filter(e => set.has(e.item_id));
+};
+
+export const crearItemExtra = (extra: Omit<ItemExtra, 'id'>): Promise<number> => {
+    return addRecord<ItemExtra>('item_extras', extra);
+};
+
+export const crearMultiplesItemExtras = (extras: Omit<ItemExtra, 'id'>[]): Promise<number[]> => {
+    return new Promise((resolve, reject) => {
+        openDB().then(db => {
+            const transaction = db.transaction('item_extras', 'readwrite');
+            const store = transaction.objectStore('item_extras');
+            const results: number[] = [];
+
+            extras.forEach(extra => {
+                const request = store.add(extra);
+                request.onsuccess = () => {
+                    results.push(request.result as number);
+                    if (results.length === extras.length) {
+                        resolve(results);
+                        closeDB(db);
+                    }
+                };
+                request.onerror = () => {
+                    reject('Error al agregar extra de item: ' + request.error);
                     closeDB(db);
                 };
             });
