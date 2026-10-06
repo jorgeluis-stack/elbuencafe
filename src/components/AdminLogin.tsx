@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useOrders } from '../context/OrderContext';
+import { verificarCredencialesUsuario, verificarCredencialesMesero } from '../db/SupabaseQueries';
+import { isSupabaseConfigured } from '../db/supabaseClient';
 import { useAccount } from '../context/AccountContext';
 import { User, Lock, Eye, EyeOff, LogIn, UserPlus, Trash2, Save, ChefHat, Users, Shield } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -57,20 +59,40 @@ export const AdminLogin: React.FC<{ currentRole: 'admin' | 'mesero' | 'cocina' |
         setError('');
         setIsLoading(true);
 
-        // Usar los usuarios del contexto (cargados desde Supabase o localStorage)
+        // Validación vía RPC verificar_credenciales (SECURITY DEFINER: bypasea
+        // RLS, valida directo en el servidor). No depende de la lista `users`
+        // en memoria → elimina la race condition de carga fría. La lista
+        // `users` del contexto se conserva para gestión/listado en el dashboard.
         setTimeout(async () => {
-            // 1. Buscar primero en el contexto (Supabase)
-            let userFound = users.find(
-                u => u.username.toLowerCase() === username.toLowerCase() && u.password === password
-            );
+            // 1. Fuente primaria: usuarios_sistema vía RPC
+            let userFound: UserCredentials | undefined = undefined;
 
-            // 2. Si no se encontró en el contexto, buscar en localStorage
-            if (!userFound) {
+            try {
+                const u = await verificarCredencialesUsuario(username, password);
+                if (u) {
+                    userFound = { username: u.username, password, roles: u.roles };
+                } else {
+                    // 2. Complemento: tabla meseros vía RPC (usuarios que solo
+                    // existen como meseros)
+                    const m = await verificarCredencialesMesero(username, password);
+                    if (m) {
+                        userFound = { username: m.username, password, roles: (m as any).rol ?? (m as any).roles ?? 'mesero' };
+                    }
+                }
+            } catch (rpcErr) {
+                console.error('Error de conexión al verificar credenciales:', rpcErr);
+                setError('Error de conexión, intenta de nuevo');
+                setIsLoading(false);
+                return;
+            }
+
+            // 3. Fallback offline: solo cuando Supabase no está configurado
+            if (!userFound && !isSupabaseConfigured()) {
                 try {
                     const savedUsers = localStorage.getItem('elbuencafe_users');
                     if (savedUsers) {
                         const parsed = JSON.parse(savedUsers);
-                        const localUsers = parsed.map((u: any) => ({
+                        const localUsers: UserCredentials[] = parsed.map((u: any) => ({
                             username: u.username,
                             password: u.password,
                             roles: u.roles || u.role || 'mesero'

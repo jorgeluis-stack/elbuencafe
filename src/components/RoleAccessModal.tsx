@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { X, Shield, Users, ChefHat, User, Lock, Eye, EyeOff, LogIn, ArrowLeft } from 'lucide-react';
-import { useOrders } from '../context/OrderContext';
 import { ModalWrapper } from './ModalWrapper';
+import { verificarCredencialesUsuario, verificarCredencialesMesero } from '../db/SupabaseQueries';
+import { isSupabaseConfigured } from '../db/supabaseClient';
 
 interface UserCredentials {
     username: string;
@@ -16,7 +17,6 @@ interface RoleAccessModalProps {
 }
 
 export const RoleAccessModal: React.FC<RoleAccessModalProps> = ({ isOpen, onClose, onRoleSelected }) => {
-    const { users } = useOrders();
     const [step, setStep] = useState<'select' | 'login'>('select');
     const [selectedRole, setSelectedRole] = useState<'admin' | 'mesero' | 'cocina' | null>(null);
     const [username, setUsername] = useState('');
@@ -41,28 +41,56 @@ export const RoleAccessModal: React.FC<RoleAccessModalProps> = ({ isOpen, onClos
 
         setTimeout(async () => {
             try {
-                let userFound = users.find(
-                    u => u.username.toLowerCase() === username.toLowerCase() && u.password === password
-                );
+                // Validación vía RPC verificar_credenciales (SECURITY DEFINER:
+                // bypasea RLS, valida directo en el servidor). No depende de la
+                // lista `users` en memoria → elimina la race condition de carga
+                // fría. Fuente primaria: usuarios_sistema (preserva acceso total
+                // del admin); mesero/cocina complementan con la tabla meseros.
+                let userFound: UserCredentials | undefined = undefined;
 
-            if (!userFound) {
                 try {
-                    const savedUsers = localStorage.getItem('elbuencafe_users');
-                    if (savedUsers) {
-                        const parsed = JSON.parse(savedUsers);
-                        const localUsers = parsed.map((u: any) => ({
-                            username: u.username,
-                            password: u.password,
-                            roles: u.roles || u.role || 'mesero'
-                        }));
-                        userFound = localUsers.find(
-                            u => u.username.toLowerCase() === username.toLowerCase() && u.password === password
-                        );
+                    if (selectedRole === 'admin') {
+                        const u = await verificarCredencialesUsuario(username, password);
+                        if (u) {
+                            userFound = { username: u.username, password, roles: u.roles };
+                        }
+                    } else {
+                        const u = await verificarCredencialesUsuario(username, password);
+                        if (u) {
+                            userFound = { username: u.username, password, roles: u.roles };
+                        } else {
+                            const m = await verificarCredencialesMesero(username, password);
+                            if (m) {
+                                userFound = { username: m.username, password, roles: (m as any).rol ?? (m as any).roles ?? 'mesero' };
+                            }
+                        }
                     }
-                } catch (err) {
-                    console.error('Error al leer usuarios de localStorage:', err);
+                } catch (rpcErr) {
+                    console.error('Error de conexión al verificar credenciales:', rpcErr);
+                    setError('Error de conexión, intenta de nuevo');
+                    setIsLoading(false);
+                    return;
                 }
-            }
+
+                // Fallback offline: solo cuando Supabase no está configurado
+                if (!userFound && !isSupabaseConfigured()) {
+                    try {
+                        const savedUsers = localStorage.getItem('elbuencafe_users');
+                        if (savedUsers) {
+                            const parsed = JSON.parse(savedUsers);
+                            const localUsers: UserCredentials[] = parsed.map((u: any) => ({
+                                username: u.username,
+                                password: u.password,
+                                roles: u.roles || u.role || 'mesero'
+                            }));
+                            userFound = localUsers.find(
+                                u => u.username.toLowerCase() === username.toLowerCase() && u.password === password
+                            );
+                        }
+                    } catch (err) {
+                        console.error('Error al leer usuarios de localStorage:', err);
+                    }
+                }
 
             // C9.12 Nivel 1 (1e): autocreación de admin/admin DESHABILITADA por
             // seguridad. Si el usuario no existe, el login falla con mensaje claro
