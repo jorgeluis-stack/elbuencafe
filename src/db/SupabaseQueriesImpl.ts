@@ -180,23 +180,22 @@ export const verificarCredencialesMesero = async (
     username: string,
     password: string
 ): Promise<Mesero | undefined> => {
-    // Obtener el mesero por username, password y activo (sin filtrar por rol exacto)
-    const { data, error } = await supabase
-        .from('meseros')
-        .select('*')
-        .eq('username', username)
-        .eq('password_hash', password)
-        .eq('activo', true)
-        .single();
+    // C9.12 Nivel 1 (1c): verificación vía RPC SECURITY DEFINER; el cliente ya no
+    // consulta directamente la tabla meseros para validar credenciales.
+    const { data, error } = await supabase.rpc('verificar_credenciales', {
+        p_tipo: 'mesero',
+        p_username: username,
+        p_password: password,
+    });
 
-    if (error) {
-        if (error.code === 'PGRST116') return undefined;
-        throw new Error(`Error al verificar credenciales: ${error.message}`);
-    }
+    if (error) throw new Error(`Error al verificar credenciales: ${error.message}`);
+    if (!data || (data as any).ok !== true || !(data as any).usuario) return undefined;
 
-    // Verificar que el mesero tenga rol 'mesero' o 'admin' (soporta múltiples roles separados por coma)
-    const mesero = data as Mesero;
-    const roles = mesero.rol.split(',').map(r => r.trim());
+    // Mismo shape que antes: fila de meseros. Se conserva la verificación de rol
+    // 'mesero' o 'admin' (soporta múltiples roles separados por coma).
+    const mesero = (data as any).usuario as Mesero;
+    const rolRaw: string = mesero.rol ?? ((mesero as any).roles ?? '');
+    const roles = rolRaw.split(',').map(r => r.trim());
     if (roles.includes('mesero') || roles.includes('admin')) {
         return mesero;
     }
@@ -1253,19 +1252,18 @@ export const verificarCredencialesUsuario = async (
     username: string,
     password: string
 ): Promise<UsuarioSistema | undefined> => {
-    const { data, error } = await supabase
-        .from('usuarios_sistema')
-        .select('*')
-        .eq('username', username)
-        .eq('password', password)
-        .single();
+    // C9.12 Nivel 1 (1c): verificación vía RPC SECURITY DEFINER; el cliente ya no
+    // consulta directamente la tabla usuarios_sistema para validar credenciales.
+    const { data, error } = await supabase.rpc('verificar_credenciales', {
+        p_tipo: 'usuario_sistema',
+        p_username: username,
+        p_password: password,
+    });
 
-    if (error) {
-        if (error.code === 'PGRST116') return undefined;
-        throw new Error(`Error al verificar credenciales: ${error.message}`);
-    }
+    if (error) throw new Error(`Error al verificar credenciales: ${error.message}`);
+    if (!data || (data as any).ok !== true || !(data as any).usuario) return undefined;
     // Normalizar: si tiene 'role' pero no 'roles', usar 'role' como 'roles'
-    const result = data as any;
+    const result = (data as any).usuario as any;
     if (!result.roles && result.role) {
         result.roles = result.role;
     }

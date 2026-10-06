@@ -84,17 +84,11 @@ export const AdminLogin: React.FC<{ currentRole: 'admin' | 'mesero' | 'cocina' |
                 }
             }
 
-            // 3. Si no se encontró y es admin/admin, crearlo automáticamente en Supabase + localStorage
+            // 3. C9.12 Nivel 1 (1e): autocreación de admin/admin DESHABILITADA por
+            // seguridad. Si el usuario no existe, el login falla con mensaje claro
+            // y NO se crea. Crear manualmente vía SQL Editor.
             if (!userFound && username.toLowerCase() === 'admin' && password === 'admin') {
-                try {
-                    await saveUser({ username: 'admin', password: 'admin', roles: 'admin' });
-                    userFound = { username: 'admin', password: 'admin', roles: 'admin' };
-                } catch (err) {
-                    console.error('Error al crear admin default:', err);
-                    // Fallback: crear solo en localStorage
-                    userFound = { username: 'admin', password: 'admin', roles: 'admin' };
-                    localStorage.setItem('elbuencafe_users', JSON.stringify([userFound]));
-                }
+                console.warn('[C9.12 Nivel 1] Usuario admin no existe en usuarios_sistema. Autocreación deshabilitada por seguridad. Crear manualmente vía SQL Editor.');
             }
 
             if (userFound) {
