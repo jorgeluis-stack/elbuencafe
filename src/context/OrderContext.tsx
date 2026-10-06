@@ -16,7 +16,7 @@ import {
   eliminarUsuario as eliminarUsuarioDB,
   UsuarioSistema
 } from '../db/SupabaseQueries';
-import { isSupabaseConfigured } from '../db/supabaseClient';
+import { isSupabaseConfigured, supabase } from '../db/supabaseClient';
 
 interface UserCredentials {
   username: string;
@@ -409,6 +409,9 @@ export const OrderProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     try {
       if (isSupabaseConfigured()) {
         await eliminarUsuarioDB(username);
+        const { error: errorMesero } = await supabase.from('meseros')
+          .update({ activo: false }).eq('username', username);
+        if (errorMesero) console.error('Error al desactivar mesero:', errorMesero);
         const usuariosDB = await obtenerTodosLosUsuarios();
         const mapped: UserCredentials[] = usuariosDB.map(u => ({
           username: u.username,
