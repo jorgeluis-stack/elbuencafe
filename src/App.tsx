@@ -10,9 +10,10 @@ import { KitchenView } from './components/KitchenView';
 import { RoleAccessModal } from './components/RoleAccessModal';
 import { NotificationToast } from './components/NotificationToast';
 import { SplashScreen } from './components/SplashScreen';
+import { verificarCredencialesMesero, verificarCredencialesUsuario } from './db/SupabaseQueries';
 
 const AppContent: React.FC = () => {
-  const { currentRole, setCurrentRole, users } = useOrders();
+  const { currentRole, setCurrentRole } = useOrders();
   const { loginCocina, loginCocinaAsAdmin, loginMesero, loginMeseroAsAdmin, mesaSeleccionada, meseroLogueado } = useAccount();
   const [showSectionModal, setShowSectionModal] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
@@ -30,9 +31,27 @@ const AppContent: React.FC = () => {
 
   // Handle section selection from the modal
   const handleRoleSelected = async (role: 'admin' | 'mesero' | 'cocina', username: string, password: string) => {
-    // Verificar si el usuario tiene rol admin (acceso total)
-    const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
-    const isAdmin = user?.roles.includes('admin') ?? false;
+    // isAdmin se deriva del servidor (RPC verificar_credenciales vía proxy
+    // SupabaseQueries — la misma validación que ya hizo RoleAccessModal).
+    // No se consulta la lista `users` en memoria: elimina la dependencia de
+    // timing de carga fría (residuo de App.tsx:34 tras f2499db).
+    let isAdmin = false;
+    try {
+      const u = await verificarCredencialesUsuario(username, password);
+      const rolesUsuario: string = u?.roles ?? (u as any)?.role ?? '';
+      if (rolesUsuario.split(',').map(r => r.trim()).includes('admin')) {
+        isAdmin = true;
+      } else {
+        const m = await verificarCredencialesMesero(username, password);
+        const rolMesero: string = (m as any)?.rol ?? (m as any)?.roles ?? '';
+        isAdmin = rolMesero.split(',').map(r => r.trim()).includes('admin');
+      }
+    } catch {
+      // Fallo de red posterior a un login ya validado por el modal:
+      // degradar a ruta no-admin; loginMesero/loginCocina revalidan de todos
+      // modos (mismo comportamiento que la carga fría anterior).
+      isAdmin = false;
+    }
 
     // Set up authentication based on the role
     if (role === 'cocina') {
