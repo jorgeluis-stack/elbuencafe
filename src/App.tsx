@@ -10,7 +10,7 @@ import { KitchenView } from './components/KitchenView';
 import { RoleAccessModal } from './components/RoleAccessModal';
 import { NotificationToast } from './components/NotificationToast';
 import { SplashScreen } from './components/SplashScreen';
-import { verificarCredencialesMesero, verificarCredencialesUsuario } from './db/SupabaseQueries';
+import { supabase } from './db/supabaseClient';
 
 const AppContent: React.FC = () => {
   const { currentRole, setCurrentRole } = useOrders();
@@ -31,20 +31,19 @@ const AppContent: React.FC = () => {
 
   // Handle section selection from the modal
   const handleRoleSelected = async (role: 'admin' | 'mesero' | 'cocina', username: string, password: string) => {
-    // isAdmin se deriva del servidor (RPC verificar_credenciales vía proxy
-    // SupabaseQueries — la misma validación que ya hizo RoleAccessModal).
-    // No se consulta la lista `users` en memoria: elimina la dependencia de
-    // timing de carga fría (residuo de App.tsx:34 tras f2499db).
+    // Migración N2-subfase2: isAdmin se deriva de la sesión Supabase Auth
+    // (profiles.roles), no del RPC verificar_credenciales. El modal ya
+    // autenticó vía signInWithPassword; aquí solo se lee la sesión activa.
+    // No se consulta la lista `users` en memoria (sin dependencia de timing).
     let isAdmin = false;
     try {
-      const u = await verificarCredencialesUsuario(username, password);
-      const rolesUsuario: string = u?.roles ?? (u as any)?.role ?? '';
-      if (rolesUsuario.split(',').map(r => r.trim()).includes('admin')) {
-        isAdmin = true;
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        isAdmin = false;
       } else {
-        const m = await verificarCredencialesMesero(username, password);
-        const rolMesero: string = (m as any)?.rol ?? (m as any)?.roles ?? '';
-        isAdmin = rolMesero.split(',').map(r => r.trim()).includes('admin');
+        const { data: profile } = await supabase.from('profiles').select('roles').eq('id', session.user.id).single();
+        const rolesStr: string = (profile as any)?.roles ?? '';
+        isAdmin = rolesStr.split(',').map(r => r.trim()).includes('admin');
       }
     } catch {
       // Fallo de red posterior a un login ya validado por el modal:

@@ -125,6 +125,8 @@ const createDummyAuth = (): any => ({
     getSession: () => Promise.resolve({ data: { session: null }, error: null }),
     getUser: () => Promise.resolve({ data: { user: null }, error: null }),
     signIn: () => Promise.resolve({ data: null, error: { message: 'Supabase not configured' } }),
+    signInWithPassword: async () => ({ data: { user: null, session: null }, error: { message: 'Modo offline: login no disponible', name: 'OfflineError', status: 503 } }),
+    signUp: async () => ({ data: { user: null, session: null }, error: { message: 'Modo offline', name: 'OfflineError', status: 503 } }),
     signOut: () => Promise.resolve({ error: null }),
     onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => { } } } }),
 });

@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { X, Shield, Users, ChefHat, User, Lock, Eye, EyeOff, LogIn, ArrowLeft } from 'lucide-react';
 import { ModalWrapper } from './ModalWrapper';
-import { verificarCredencialesUsuario, verificarCredencialesMesero } from '../db/SupabaseQueries';
-import { isSupabaseConfigured } from '../db/supabaseClient';
+import { supabase, isSupabaseConfigured } from '../db/supabaseClient';
 
 interface UserCredentials {
     username: string;
@@ -41,28 +40,22 @@ export const RoleAccessModal: React.FC<RoleAccessModalProps> = ({ isOpen, onClos
 
         setTimeout(async () => {
             try {
-                // Validación vía RPC verificar_credenciales (SECURITY DEFINER:
-                // bypasea RLS, valida directo en el servidor). No depende de la
-                // lista `users` en memoria → elimina la race condition de carga
-                // fría. Fuente primaria: usuarios_sistema (preserva acceso total
-                // del admin); mesero/cocina complementan con la tabla meseros.
+                // Migración N2-subfase2: validación vía Supabase Auth
+                // (auth.users + tabla profiles). El email se deriva del
+                // username: `${username}@elbuencafe.local`. Los chequeos de
+                // rol leen `profiles.roles` (CSV plural) — sin cambio en
+                // lógica de chequeos. Contrato preservado: onRoleSelected
+                // sigue recibiendo (rol, username, password plaintext).
                 let userFound: UserCredentials | undefined = undefined;
 
                 try {
-                    if (selectedRole === 'admin') {
-                        const u = await verificarCredencialesUsuario(username, password);
-                        if (u) {
-                            userFound = { username: u.username, password, roles: u.roles };
-                        }
-                    } else {
-                        const u = await verificarCredencialesUsuario(username, password);
-                        if (u) {
-                            userFound = { username: u.username, password, roles: u.roles };
-                        } else {
-                            const m = await verificarCredencialesMesero(username, password);
-                            if (m) {
-                                userFound = { username: m.username, password, roles: (m as any).rol ?? (m as any).roles ?? 'mesero' };
-                            }
+                    const email = `${username.toLowerCase()}@elbuencafe.local`;
+                    const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+                    if (!signInError && data.user) {
+                        const { data: profile } = await supabase.from('profiles').select('*').eq('id', data.user.id).single();
+                        if (profile) {
+                            const rolesStr: string = (profile as any).roles ?? '';
+                            userFound = { username, password, roles: rolesStr };
                         }
                     }
                 } catch (rpcErr) {

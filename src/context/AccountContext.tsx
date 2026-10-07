@@ -21,7 +21,6 @@ import {
     obtenerTodasLasMesas,
     obtenerMeseroPorId,
     obtenerMeseroPorUsername,
-    verificarCredencialesMesero,
     obtenerCuentaAbiertaPorMesa,
     obtenerCuentasAbiertasPorMesa,
     obtenerCuentasAbiertas,
@@ -64,8 +63,6 @@ import {
     calcularTotalCuenta,
     obtenerEstadoMesaCompleto,
     suscribirACambios,
-    verificarCredencialesUsuario,
-    agregarMesero,
     UsuarioSistema
 } from '../db/SupabaseQueries';
 import { supabase, isSupabaseConfigured } from '../db/supabaseClient';
@@ -378,72 +375,54 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
         }
     };
 
-    // Login de mesero (busca en meseros, fallback a usuarios_sistema con auto-creación)
+    // Login de mesero (N2-subfase2: Supabase Auth es fuente de verdad).
+    // El modal ya autenticó vía signInWithPassword; aquí se exige sesión
+    // activa y se resuelve el mesero por username SIN validar password
+    // (lookup vía obtenerMeseroPorUsername — R2). Auto-create en `meseros`
+    // ELIMINADO. Fallback localStorage solo si !isSupabaseConfigured.
+    // Firma preservada (username, password) — password intencionalmente no usado.
     const loginMesero = async (username: string, password: string): Promise<boolean> => {
+        void password;
         try {
-            let loginValido = false;
-            let meseroData = null;
-
-            if (isSupabaseConfigured()) {
-                // 1. Buscar directamente en tabla meseros
-                const mesero = await verificarCredencialesMesero(username, password);
-                if (mesero) {
-                    meseroData = mesero;
-                    loginValido = true;
-                } else {
-                    // 2. No existe en meseros → buscar en usuarios_sistema
-                    const usuario = await verificarCredencialesUsuario(username, password);
-                    if (usuario && (usuario.roles.includes('mesero') || usuario.roles.includes('admin'))) {
-                        // Auto-crear registro en meseros
-                        const nuevoId = await agregarMesero({
-                            nombre: usuario.username,
-                            username: usuario.username,
-                            password_hash: usuario.password,
-                            rol: usuario.roles,
-                            activo: true
-                        });
-                        meseroData = {
-                            id: nuevoId,
-                            nombre: usuario.username,
-                            username: usuario.username,
-                            password_hash: usuario.password,
-                            rol: usuario.roles,
-                            activo: true
-                        };
-                        loginValido = true;
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) {
+                // Fallback offline: solo cuando Supabase no está configurado
+                if (!isSupabaseConfigured()) {
+                    try {
+                        const savedUsers = localStorage.getItem('elbuencafe_users');
+                        if (savedUsers) {
+                            const users = JSON.parse(savedUsers);
+                            const user = users.find((u: any) => u.username.toLowerCase() === username.toLowerCase());
+                            if (user && (user.roles?.includes('mesero') || user.role?.includes('mesero') || user.roles?.includes('admin') || user.role?.includes('admin'))) {
+                                setMeseroLogueado({
+                                    id: Date.now(), // Fake ID
+                                    nombre: user.username,
+                                    username: user.username,
+                                    password_hash: '',
+                                    rol: user.roles || user.role || 'mesero',
+                                    activo: true
+                                });
+                                cargarMesas();
+                                recargarContadorPendientes();
+                                return true;
+                            }
+                        }
+                    } catch (err) {
+                        console.error('Error al leer usuarios de localStorage:', err);
                     }
                 }
+                return false;
             }
-
-            if (!loginValido) {
-                // Fallback a localStorage
-                const savedUsers = localStorage.getItem('elbuencafe_users');
-                if (savedUsers) {
-                    const users = JSON.parse(savedUsers);
-                    const user = users.find((u: any) => u.username.toLowerCase() === username.toLowerCase() && u.password === password);
-                    if (user && (user.roles?.includes('mesero') || user.role?.includes('mesero') || user.roles?.includes('admin') || user.role?.includes('admin'))) {
-                        meseroData = {
-                            id: Date.now(), // Fake ID
-                            nombre: user.username,
-                            username: user.username,
-                            password_hash: user.password,
-                            rol: user.roles || user.role || 'mesero',
-                            activo: true
-                        };
-                        loginValido = true;
-                    }
-                }
+            const mesero = await obtenerMeseroPorUsername(username);
+            if (!mesero) {
+                return false;
             }
-
-            if (loginValido && meseroData) {
-                setMeseroLogueado(meseroData);
-                // Forzar recarga de mesas y estado pendiente después de login
-                // para garantizar consistencia tras cerrar/reiniciar sesión
-                cargarMesas();
-                recargarContadorPendientes();
-                return true;
-            }
-            return false;
+            setMeseroLogueado(mesero);
+            // Forzar recarga de mesas y estado pendiente después de login
+            // para garantizar consistencia tras cerrar/reiniciar sesión
+            cargarMesas();
+            recargarContadorPendientes();
+            return true;
         } catch (error) {
             console.error('Error en login:', error);
             return false;
@@ -500,48 +479,22 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
         setCarroLocal([]);
     };
 
-    // Login de cocina (busca en usuarios_sistema y meseros)
+    // Login de cocina (N2-subfase2: Supabase Auth es fuente de verdad).
+    // Se exige sesión activa (el modal ya autenticó vía signInWithPassword)
+    // y se verifica el rol cocina/admin desde profiles.roles vía session.
+    // ELIMINADO el SELECT directo con eq('password_hash', password) y el
+    // fallback localStorage con password. Firma preservada.
     const loginCocina = async (username: string, password: string): Promise<boolean> => {
+        void username;
+        void password;
         try {
-            let loginValido = false;
-
-            if (isSupabaseConfigured()) {
-                // 1. Buscar en usuarios_sistema
-                const usuario = await verificarCredencialesUsuario(username, password);
-                if (usuario && (usuario.roles.includes('cocina') || usuario.roles.includes('admin'))) {
-                    loginValido = true;
-                } else {
-                    // 2. Fallback: buscar en meseros (usando password_hash)
-                    const { data: mesero } = await supabase
-                        .from('meseros')
-                        .select('*')
-                        .eq('username', username)
-                        .eq('password_hash', password)
-                        .eq('activo', true)
-                        .single();
-
-                    if (mesero) {
-                        const roles = (mesero.rol || '').split(',').map((r: string) => r.trim());
-                        if (roles.includes('cocina') || roles.includes('admin')) {
-                            loginValido = true;
-                        }
-                    }
-                }
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) {
+                return false;
             }
-
-            if (!loginValido) {
-                // Fallback a localStorage
-                const savedUsers = localStorage.getItem('elbuencafe_users');
-                if (savedUsers) {
-                    const users = JSON.parse(savedUsers);
-                    const user = users.find((u: any) => u.username.toLowerCase() === username.toLowerCase() && u.password === password);
-                    if (user && (user.roles?.includes('cocina') || user.role?.includes('cocina') || user.roles?.includes('admin') || user.role?.includes('admin'))) {
-                        loginValido = true;
-                    }
-                }
-            }
-
-            if (loginValido) {
+            const { data: profile } = await supabase.from('profiles').select('roles').eq('id', session.user.id).single();
+            const roles = (((profile as any)?.roles ?? '') as string).split(',').map((r: string) => r.trim());
+            if (roles.includes('cocina') || roles.includes('admin')) {
                 setCocinaLogueada(true);
                 return true;
             }
