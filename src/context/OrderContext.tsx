@@ -179,12 +179,22 @@ export const OrderProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [notifications, setNotifications] = useState<string[]>([]);
   const [users, setUsers] = useState<UserCredentials[]>([]);
   const [loading, setLoading] = useState(true);
+  // F2 (C9-N2-B): true solo con sesión Supabase Auth. Las cargas y
+  // suscripciones a usuarios_sistema / ordenes_cliente se omiten como anon.
+  const [sesionActiva, setSesionActiva] = useState(false);
 
   // Cargar usuarios desde Supabase
   useEffect(() => {
     const cargarUsuarios = async () => {
       try {
         if (isSupabaseConfigured()) {
+          // F2: no cargar usuarios_sistema cuando el usuario es anon (R1)
+          const { data: { session } } = await supabase.auth.getSession();
+          setSesionActiva(!!session);
+          if (!session) {
+            setUsers([]);
+            return;
+          }
           const usuariosDB = await obtenerTodosLosUsuarios();
           const mapped: UserCredentials[] = usuariosDB.map(u => ({
             username: u.username,
@@ -228,6 +238,14 @@ export const OrderProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const cargarOrdenes = async () => {
       try {
         if (isSupabaseConfigured()) {
+          // F2: no cargar ordenes_cliente como anon (R1); tampoco caer a
+          // MOCK_ORDERS por falta de sesión (solo lista vacía)
+          const { data: { session } } = await supabase.auth.getSession();
+          setSesionActiva(!!session);
+          if (!session) {
+            setOrders([]);
+            return;
+          }
           const ordenesDB = await obtenerOrdenesCliente();
           const mapped: Order[] = ordenesDB.map(o => ({
             id: o.id,
@@ -273,6 +291,59 @@ export const OrderProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     cargarOrdenes();
   }, []);
 
+  // F2: refetch de users+orders al cambiar la sesión (login/logout).
+  // RoleAccessModal/AdminLogin autentican vía supabase.auth; al completarse
+  // el login este listener recarga lo que el guard inicial omitió como anon.
+  // Al cerrar sesión se limpia el estado (sin fetch anon).
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      setSesionActiva(!!session);
+      if (!session) {
+        setUsers([]);
+        setOrders([]);
+        return;
+      }
+      try {
+        const usuariosDB = await obtenerTodosLosUsuarios();
+        setUsers(usuariosDB.map(u => ({
+          username: u.username,
+          password: u.password,
+          roles: u.roles
+        })));
+      } catch (error) {
+        console.error('Error al recargar usuarios tras login:', error);
+      }
+      try {
+        const ordenesDB = await obtenerOrdenesCliente();
+        setOrders(ordenesDB.map(o => ({
+          id: o.id,
+          orderNumber: o.order_number,
+          type: o.type,
+          tableNumber: o.table_number,
+          waiterName: o.waiter_name,
+          customerName: o.customer_name,
+          customerPhone: o.customer_phone,
+          address: o.address,
+          items: o.items as CartItem[],
+          status: o.status,
+          createdAt: o.created_at,
+          total: o.total,
+          deliveryCharge: o.delivery_charge,
+          notes: o.notes,
+          paymentMethod: o.payment_method,
+          paid: o.paid,
+          paymentDate: o.payment_date
+        })));
+      } catch (error) {
+        console.error('Error al recargar órdenes tras login:', error);
+      }
+    });
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
   // Cargar carrito desde localStorage (el carro es temporal, no va a BD)
   useEffect(() => {
     const savedCart = localStorage.getItem('elbuencafe_cart');
@@ -284,8 +355,10 @@ export const OrderProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   }, []);
 
   // Suscripción Realtime: cambios en usuarios_sistema (roles modificados por admin)
+  // F2: solo suscribir si hay sesión (no como anon)
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
+    if (!sesionActiva) return;
 
     const unsubscribe = suscribirACambios('usuarios_sistema', async () => {
       try {
@@ -304,11 +377,13 @@ export const OrderProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
     });
     return unsubscribe;
-  }, []);
+  }, [sesionActiva]);
 
   // Suscripción Realtime: cambios en órdenes de cliente
+  // F2: solo suscribir si hay sesión (no como anon)
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
+    if (!sesionActiva) return;
 
     const unsubscribe = suscribirACambios('ordenes_cliente', (payload) => {
       if (payload.eventType === 'INSERT') {
@@ -363,7 +438,7 @@ export const OrderProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     });
 
     return unsubscribe;
-  }, []);
+  }, [sesionActiva]);
 
   // Notificaciones
   const addNotification = (message: string) => {

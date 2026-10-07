@@ -121,7 +121,7 @@ export const actualizarEstadoMesa = async (
 export const obtenerTodosLosMeseros = async (): Promise<Mesero[]> => {
     const { data, error } = await supabase
         .from('meseros')
-        .select('*')
+        .select('id,nombre,username,rol,activo')
         .order('id', { ascending: true });
 
     if (error) throw new Error(`Error al obtener meseros: ${error.message}`);
@@ -131,7 +131,7 @@ export const obtenerTodosLosMeseros = async (): Promise<Mesero[]> => {
 export const obtenerMeseroPorId = async (id: number): Promise<Mesero | undefined> => {
     const { data, error } = await supabase
         .from('meseros')
-        .select('*')
+        .select('id,nombre,username,rol,activo')
         .eq('id', id)
         .single();
 
@@ -165,7 +165,7 @@ export const actualizarMesero = async (mesero: Mesero): Promise<void> => {
 export const obtenerMeseroPorUsername = async (username: string): Promise<Mesero | undefined> => {
     const { data, error } = await supabase
         .from('meseros')
-        .select('*')
+        .select('id,nombre,username,rol,activo')
         .eq('username', username)
         .single();
 
@@ -1273,7 +1273,7 @@ export const verificarCredencialesUsuario = async (
 export const obtenerTodosLosUsuarios = async (): Promise<UsuarioSistema[]> => {
     const { data, error } = await supabase
         .from('usuarios_sistema')
-        .select('*')
+        .select('id,username,roles,role,created_at')
         .order('id', { ascending: true });
 
     if (error) throw new Error(`Error al obtener usuarios: ${error.message}`);
