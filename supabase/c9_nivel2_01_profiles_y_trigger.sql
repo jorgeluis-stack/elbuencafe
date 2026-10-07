@@ -36,14 +36,33 @@ CREATE POLICY profiles_select_own
   FOR SELECT
   USING (auth.uid() = id);
 
+-- Fix 2026-10-07: la policy original autoreferenciaba profiles y causaba
+-- error 42P17 (infinite recursion). Reemplazada por función is_admin()
+-- SECURITY DEFINER que consulta sin activar RLS.
+
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_is_admin boolean;
+BEGIN
+  SELECT (roles LIKE '%admin%') INTO v_is_admin
+  FROM public.profiles WHERE id = auth.uid();
+  RETURN COALESCE(v_is_admin, false);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.is_admin() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated, anon;
+
 DROP POLICY IF EXISTS profiles_admin_all ON public.profiles;
-CREATE POLICY profiles_admin_all
-  ON public.profiles
+CREATE POLICY profiles_admin_all ON public.profiles
   FOR ALL
-  USING (EXISTS (
-    SELECT 1 FROM public.profiles p
-    WHERE p.id = auth.uid() AND p.roles LIKE '%admin%'
-  ));
+  USING (public.is_admin())
+  WITH CHECK (public.is_admin());
 
 -- ----------------------------------------------------------------------------
 -- 3. Función public.handle_new_user() — verbatim de pg_get_functiondef
