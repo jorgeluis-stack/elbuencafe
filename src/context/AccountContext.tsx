@@ -196,6 +196,25 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
     // Asientos/comensales activos con items — persisten entre vistas
     const [asientosActivos, setAsientosActivos] = useState<number[]>([1]);
 
+    // F4-blindaje (patrón F2 de OrderContext): true solo con sesión Supabase Auth.
+    // Las suscripciones Realtime a tablas operativas se omiten como anon.
+    const [sesionActiva, setSesionActiva] = useState(false);
+
+    useEffect(() => {
+        if (!isSupabaseConfigured()) return;
+        let vivo = true;
+        supabase.auth.getSession().then(({ data }) => {
+            if (vivo) setSesionActiva(!!data.session);
+        });
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+            setSesionActiva(!!session);
+        });
+        return () => {
+            vivo = false;
+            subscription.unsubscribe();
+        };
+    }, []);
+
     // Cargar mesas al montar el componente
     useEffect(() => {
         cargarMesas();
@@ -207,7 +226,10 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
     }, []);
 
     // Suscripción Realtime: cambios en minicomandas (nuevas comandas, cambios de estado)
+    // F4-blindaje (patrón F2): solo suscribir si hay sesión (no como anon)
     useEffect(() => {
+        if (!isSupabaseConfigured()) return;
+        if (!sesionActiva) return;
         // [KDS-TRACE] Instrumentación temporal de diagnóstico — solo observa, no altera lógica.
         const unsubscribe = suscribirACambios('minicomandas', (payload: any) => {
             console.log(`[KDS-TRACE] REALTIME_MINICOMANDA event=${String(payload?.eventType ?? payload?.event)} id=${String(payload?.new?.id ?? payload?.old?.id)} oldEstado=${String(payload?.old?.estado)} newEstado=${String(payload?.new?.estado)} timestamp=${new Date().toISOString()}`);
@@ -218,18 +240,24 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             }
         });
         return unsubscribe;
-    }, [mesaSeleccionada]);
+    }, [sesionActiva, mesaSeleccionada]);
 
     // Suscripción Realtime: cambios en mesas (estado LIBRE/OCUPADA/COBRADA)
+    // F4-blindaje (patrón F2): solo suscribir si hay sesión (no como anon)
     useEffect(() => {
+        if (!isSupabaseConfigured()) return;
+        if (!sesionActiva) return;
         const unsubscribe = suscribirACambios('mesas', () => {
             cargarMesas();
         });
         return unsubscribe;
-    }, []);
+    }, [sesionActiva]);
 
     // Suscripción Realtime: cambios en cuentas
+    // F4-blindaje (patrón F2): solo suscribir si hay sesión (no como anon)
     useEffect(() => {
+        if (!isSupabaseConfigured()) return;
+        if (!sesionActiva) return;
         const unsubscribe = suscribirACambios('cuentas', () => {
             recargarContadorPendientes();
 
@@ -256,10 +284,13 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             }
         });
         return unsubscribe;
-    }, [mesaSeleccionada]);
+    }, [sesionActiva, mesaSeleccionada]);
 
     // Suscripción Realtime: cambios en meseros (roles actualizados por admin)
+    // F4-blindaje (patrón F2): solo suscribir si hay sesión (no como anon)
     useEffect(() => {
+        if (!isSupabaseConfigured()) return;
+        if (!sesionActiva) return;
         const unsubscribe = suscribirACambios('meseros', async () => {
             // Si hay un mesero logueado, refrescar sus datos
             if (meseroLogueado) {
@@ -278,10 +309,15 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             }
         });
         return unsubscribe;
-    }, [meseroLogueado]);
+    }, [sesionActiva, meseroLogueado]);
 
     // Realtime: notificación al mesero saliente cuando es reemplazado
+    // F4-blindaje (patrón F2): solo suscribir si hay sesión (no como anon).
+    // Nota: meseroLogueado puede ser virtual sin sesión (loginMeseroAsAdmin),
+    // por eso el gate es por sesión Auth, no por meseroLogueado.
     useEffect(() => {
+        if (!isSupabaseConfigured()) return;
+        if (!sesionActiva) return;
         if (!meseroLogueado) return;
         const unsubscribe = suscribirACambios('historial_acciones', (payload) => {
             if (payload.new?.accion === 'REEMPLAZADO' &&
@@ -297,7 +333,7 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
             }
         });
         return unsubscribe;
-    }, [meseroLogueado, mesaSeleccionada]);
+    }, [sesionActiva, meseroLogueado, mesaSeleccionada]);
 
     // Cargar mesas desde Supabase
     const cargarMesas = async () => {
