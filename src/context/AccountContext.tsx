@@ -113,7 +113,7 @@ interface AccountContextType {
     loginMeseroAsAdmin: () => Promise<void> | void;
     loginCocina: (username: string, password: string) => Promise<boolean>;
     loginCocinaAsAdmin: () => void;
-    logoutCocina: () => void;
+    logoutCocina: () => Promise<void>;
 
     // Funciones de mesa
     seleccionarMesa: (mesa: Mesa) => Promise<void>;
@@ -497,6 +497,11 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     // Logout de mesero
     const logoutMesero = async () => {
+        try {
+            await supabase.auth.signOut();
+        } catch (error) {
+            console.warn('signOut falló (red), limpiando estado local igual:', error);
+        }
         if (mesaSeleccionada) {
             try {
                 await guardarCarroLocal(mesaSeleccionada.id, carroLocal);
@@ -547,7 +552,12 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
     };
 
     // Logout de cocina
-    const logoutCocina = () => {
+    const logoutCocina = async () => {
+        try {
+            await supabase.auth.signOut();
+        } catch (error) {
+            console.warn('signOut falló (red), limpiando estado local igual:', error);
+        }
         setCocinaLogueada(false);
     };
 

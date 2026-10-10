@@ -385,7 +385,12 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
         URL.revokeObjectURL(url);
     };
 
-    const handleLogout = () => {
+    const handleLogout = async () => {
+        try {
+            await supabase.auth.signOut();
+        } catch (error) {
+            console.warn('signOut falló (red), limpiando estado local igual:', error);
+        }
         setCurrentRole('cliente');
     };
 
