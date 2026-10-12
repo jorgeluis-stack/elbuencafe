@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useOrders } from '../context/OrderContext';
 import {
-    agregarMesero,
     actualizarMesero,
     obtenerMeseroPorUsername,
     sincronizarMesasConfiguradas,
@@ -70,6 +69,7 @@ interface UserCredentials {
     username: string;
     password: string;
     roles: string; // Roles separados por coma: "admin,mesero,cocina,repartidor"
+    nombre?: string;
 }
 
 // Si está en false, se oculta toda la interfaz de pedidos a domicilio sin borrar el código.
@@ -1110,26 +1110,17 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                                         return;
                                                     }
 
-                                                    // Guardar en Supabase + localStorage (OrderContext)
-                                                    const newUser: UserCredentials = {
-                                                        username: employeeUsername,
-                                                        password: employeePassword,
-                                                        roles: employeeRoles.join(',')
-                                                    };
-                                                    await saveUser(newUser);
-
-                                                    // También guardar en tabla meseros (AccountContext)
                                                     try {
-                                                        await agregarMesero({
-                                                            nombre: employeeNombre,
+                                                        await saveUser({
                                                             username: employeeUsername,
-                                                            password_hash: employeePassword,
-                                                            rol: employeeRoles.join(','),
-                                                            activo: true
+                                                            password: employeePassword,
+                                                            roles: employeeRoles.join(','),
+                                                            nombre: employeeNombre
                                                         });
-                                                    } catch (error) {
-                                                        console.error('Error al agregar mesero:', error);
-                                                        // No bloqueamos - el usuario ya se guardó en usuarios_sistema
+                                                    } catch (err) {
+                                                        const mensaje = err instanceof Error ? err.message : 'Error al crear el empleado';
+                                                        addNotification(`❌ ${mensaje}`);
+                                                        return;
                                                     }
 
                                                     addNotification(`✅ Empleado ${employeeNombre} agregado exitosamente`);
@@ -1184,12 +1175,6 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                                                 onClick={async () => {
                                                                     if (confirm(`¿Estás seguro de eliminar al usuario ${user.username}?`)) {
                                                                         deleteUser(user.username);
-                                                                        try {
-                                                                            const { error } = await supabase.from('usuarios_sistema').delete().eq('username', user.username);
-                                                                            if (error) console.error('Error al eliminar de Supabase:', error);
-                                                                        } catch (err) {
-                                                                            console.error('Error al eliminar usuario:', err);
-                                                                        }
                                                                         addNotification(`❌ Usuario ${user.username} eliminado`);
                                                                     }
                                                                 }}

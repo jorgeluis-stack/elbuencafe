@@ -22,6 +22,22 @@ interface UserCredentials {
   username: string;
   password: string;
   roles: string; // Roles separados por coma: "admin,mesero,cocina,repartidor"
+  nombre?: string;
+}
+
+async function obtenerMensajeErrorFuncion(error: any): Promise<string> {
+  const contexto = error?.context;
+  const cuerpo = contexto && typeof contexto.json === 'function'
+    ? await Promise.resolve(contexto.json()).catch(() => null)
+    : null;
+  if (typeof cuerpo?.error === 'string') {
+    return cuerpo.partial
+      ? `${cuerpo.error} (creación parcial: verificar el usuario ${cuerpo.user_id} en auth.users)`
+      : cuerpo.error;
+  }
+  if (typeof cuerpo?.message === 'string') return cuerpo.message;
+  if (typeof error?.message === 'string' && error.message) return error.message;
+  return 'Error al crear el usuario';
 }
 
 interface OrderContextType {
@@ -451,33 +467,33 @@ export const OrderProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   // Gestión de usuarios
   const saveUser = async (user: UserCredentials) => {
-    try {
-      if (isSupabaseConfigured()) {
-        await guardarUsuarioDB({
+    if (isSupabaseConfigured()) {
+      const roles = user.roles.split(',').map((r) => r.trim()).filter(Boolean);
+      const { error } = await supabase.functions.invoke('crear-usuario', {
+        body: {
           username: user.username,
           password: user.password,
-          roles: user.roles
-        });
-        // Recargar usuarios
-        const usuariosDB = await obtenerTodosLosUsuarios();
-        const mapped: UserCredentials[] = usuariosDB.map(u => ({
-          username: u.username,
-          password: u.password,
-          roles: u.roles
-        }));
-        setUsers(mapped);
-      } else {
-        const updatedUsers = [...users, user];
-        setUsers(updatedUsers);
-        localStorage.setItem('elbuencafe_users', JSON.stringify(updatedUsers));
+          roles,
+          nombre: user.nombre?.trim() || user.username
+        }
+      });
+      if (error) {
+        const mensaje = await obtenerMensajeErrorFuncion(error);
+        console.error('Error al crear usuario:', mensaje);
+        throw new Error(mensaje);
       }
-    } catch (error) {
-      console.error('Error al guardar usuario:', error);
-      // Fallback a localStorage
-      const updatedUsers = [...users, user];
-      setUsers(updatedUsers);
-      localStorage.setItem('elbuencafe_users', JSON.stringify(updatedUsers));
+      const usuariosDB = await obtenerTodosLosUsuarios();
+      const mapped: UserCredentials[] = usuariosDB.map(u => ({
+        username: u.username,
+        password: u.password,
+        roles: u.roles
+      }));
+      setUsers(mapped);
+      return;
     }
+    const updatedUsers = [...users, user];
+    setUsers(updatedUsers);
+    localStorage.setItem('elbuencafe_users', JSON.stringify(updatedUsers));
   };
 
   const deleteUser = async (username: string) => {
