@@ -199,7 +199,7 @@ export const OrderProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const mapped: UserCredentials[] = usuariosDB.map(u => ({
             username: u.username,
             password: u.password,
-            roles: u.roles
+            roles: (u.roles ?? '')
           }));
           setUsers(mapped);
         } else {

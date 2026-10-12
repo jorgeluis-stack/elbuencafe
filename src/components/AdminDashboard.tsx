@@ -622,7 +622,7 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                             whileTap={{ scale: 0.98 }}
                             onClick={() => {
                                 // Cargar credenciales actuales del admin
-                                const adminUser = users.find(u => u.roles.includes('admin'));
+                                const adminUser = users.find(u => (u.roles ?? '').includes('admin'));
                                 if (adminUser) {
                                     setConfigUsername(adminUser.username);
                                     setConfigPassword('');
@@ -1164,9 +1164,9 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                             <React.Fragment key={user.username}>
                                                 <div className="bg-white rounded-xl p-4 border border-brand-gold/10 flex items-center justify-between">
                                                     <div className="flex items-center gap-3">
-                                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${user.roles.includes('admin') ? 'bg-brand-gold/20 text-brand-gold' :
-                                                            user.roles.includes('mesero') ? 'bg-blue-500/20 text-blue-500' :
-                                                                user.roles.includes('cocina') ? 'bg-orange-500/20 text-orange-500' :
+                                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${(user.roles ?? '').includes('admin') ? 'bg-brand-gold/20 text-brand-gold' :
+                                                            (user.roles ?? '').includes('mesero') ? 'bg-blue-500/20 text-blue-500' :
+                                                                (user.roles ?? '').includes('cocina') ? 'bg-orange-500/20 text-orange-500' :
                                                                     'bg-purple-500/20 text-purple-500'
                                                             }`}>
                                                             <User className="w-5 h-5" />
@@ -1174,12 +1174,12 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                                         <div>
                                                             <p className="font-bold text-brand-green-dark">{user.username}</p>
                                                             <p className="text-xs text-brand-warm-gray/60 uppercase font-bold">
-                                                                {user.roles.includes('admin') ? 'Administrador' : user.roles.includes('mesero') && user.roles.includes('cocina') ? 'Mesero/Cocina' : user.roles.includes('mesero') ? 'Mesero' : user.roles.includes('cocina') ? 'Cocina' : 'Repartidor'}
+                                                                {(user.roles ?? '').includes('admin') ? 'Administrador' : (user.roles ?? '').includes('mesero') && (user.roles ?? '').includes('cocina') ? 'Mesero/Cocina' : (user.roles ?? '').includes('mesero') ? 'Mesero' : (user.roles ?? '').includes('cocina') ? 'Cocina' : 'Repartidor'}
                                                             </p>
                                                         </div>
                                                     </div>
                                                     <div className="flex items-center gap-2">
-                                                        {!user.roles.includes('admin') && (
+                                                        {!(user.roles ?? '').includes('admin') && (
                                                             <button
                                                                 onClick={async () => {
                                                                     if (confirm(`¿Estás seguro de eliminar al usuario ${user.username}?`)) {
@@ -1218,7 +1218,7 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                                         <p className="text-xs font-bold uppercase text-brand-warm-gray/60">Editar Roles:</p>
                                                         <div className="flex flex-wrap gap-2">
                                                             {['mesero', 'cocina', 'repartidor'].map(rol => {
-                                                                const currentRoles = editRolesMap[user.username] || user.roles.split(',').filter((r: string) => r);
+                                                                const currentRoles = editRolesMap[user.username] || (user.roles ?? '').split(',').filter((r: string) => r);
                                                                 return (
                                                                     <label key={rol} className="flex items-center gap-1 text-sm cursor-pointer bg-brand-crema-dark/5 px-3 py-1.5 rounded-lg">
                                                                         <input
@@ -1239,7 +1239,7 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                                         </div>
                                                         <button
                                                             onClick={async () => {
-                                                                const rolesToSave = (editRolesMap[user.username] || user.roles.split(',').filter((r: string) => r)).join(',');
+                                                                const rolesToSave = (editRolesMap[user.username] || (user.roles ?? '').split(',').filter((r: string) => r)).join(',');
 
                                                                 const updatedUsers = users.map((u: any) =>
                                                                     u.username === user.username
