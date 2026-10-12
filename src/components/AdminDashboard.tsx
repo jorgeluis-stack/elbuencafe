@@ -103,7 +103,7 @@ const obtenerRangoDiaUTC = (fecha: string): { inicio: string; fin: string } => {
 };
 
 export const AdminDashboard: React.FC = () => {
-    const { orders, currentRole, setCurrentRole, users, saveUser, deleteUser, addNotification, resetOrders, markOrderAsPaid, updateAdminCredentials } = useOrders();
+    const { orders, currentRole, setCurrentRole, users, saveUser, updateUserRoles, deleteUser, addNotification, resetOrders, markOrderAsPaid, updateAdminCredentials } = useOrders();
     const [employeeNombre, setEmployeeNombre] = useState('');
     const [selectedDate, setSelectedDate] = useState<string>(obtenerFechaLocalYYYYMMDD());
     const [showMenuManager, setShowMenuManager] = useState(false);
@@ -1224,28 +1224,17 @@ Método: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'Electrónico'}
                                                         </div>
                                                         <button
                                                             onClick={async () => {
-                                                                const rolesToSave = (editRolesMap[user.username] || (user.roles ?? '').split(',').filter((r: string) => r)).join(',');
-
-                                                                const updatedUsers = users.map((u: any) =>
-                                                                    u.username === user.username
-                                                                        ? { ...u, roles: rolesToSave }
-                                                                        : u
-                                                                );
-                                                                localStorage.setItem('elbuencafe_users', JSON.stringify(updatedUsers));
-
+                                                                const currentRoles = editRolesMap[user.username] || (user.roles ?? '').split(',').filter((r: string) => r);
+                                                                const rolesToSave = currentRoles.join(',');
                                                                 try {
-                                                                    const { error } = await supabase.from('usuarios_sistema').update({ roles: rolesToSave }).eq('username', user.username);
-                                                                    if (error) console.error('Error al actualizar en Supabase:', error);
-                                                                    // También actualizar en tabla meseros para sincronización completa
-                                                                    const { error: error2 } = await supabase.from('meseros').update({ rol: rolesToSave }).eq('username', user.username);
-                                                                    if (error2) console.error('Error al actualizar mesero:', error2);
+                                                                    await updateUserRoles(user.username, rolesToSave);
+                                                                    addNotification(`✅ Roles de ${user.username} actualizados a: ${rolesToSave || '(ninguno)'}`);
+                                                                    setEditingUser(null);
+                                                                    setEditRolesMap({});
                                                                 } catch (err) {
-                                                                    console.error('Error al actualizar usuario:', err);
+                                                                    const mensaje = err instanceof Error ? err.message : 'Error al actualizar los roles';
+                                                                    addNotification(`❌ ${mensaje}`);
                                                                 }
-
-                                                                addNotification(`✅ Roles de ${user.username} actualizados a: ${rolesToSave}`);
-                                                                setEditingUser(null);
-                                                                setEditRolesMap({});
                                                             }}
                                                             className="w-full bg-gradient-to-r from-brand-gold to-brand-gold-dark text-brand-green-dark font-bold py-2 rounded-lg text-sm"
                                                         >

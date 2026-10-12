@@ -25,7 +25,7 @@ interface UserCredentials {
   nombre?: string;
 }
 
-async function obtenerMensajeErrorFuncion(error: any): Promise<string> {
+async function obtenerMensajeErrorFuncion(error: any, fallback = 'Error al crear el usuario'): Promise<string> {
   const contexto = error?.context;
   const cuerpo = contexto && typeof contexto.json === 'function'
     ? await Promise.resolve(contexto.json()).catch(() => null)
@@ -37,7 +37,7 @@ async function obtenerMensajeErrorFuncion(error: any): Promise<string> {
   }
   if (typeof cuerpo?.message === 'string') return cuerpo.message;
   if (typeof error?.message === 'string' && error.message) return error.message;
-  return 'Error al crear el usuario';
+  return fallback;
 }
 
 interface OrderContextType {
@@ -71,6 +71,7 @@ interface OrderContextType {
   clearNotifications: () => void;
   users: UserCredentials[];
   saveUser: (user: UserCredentials) => Promise<void>;
+  updateUserRoles: (username: string, roles: string) => Promise<void>;
   deleteUser: (username: string) => Promise<void>;
   updateAdminCredentials: (username: string, password: string) => Promise<void>;
 }
@@ -496,6 +497,46 @@ export const OrderProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     localStorage.setItem('elbuencafe_users', JSON.stringify(updatedUsers));
   };
 
+  const updateUserRoles = async (username: string, rolesCsv: string) => {
+    const roles = rolesCsv.split(',').map((r) => r.trim()).filter(Boolean);
+    if (isSupabaseConfigured()) {
+      // El login real lee profiles.roles; resolver el id (uuid) del perfil
+      // por username para invocar la Edge Function `actualizar-usuario`.
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('username', username)
+        .maybeSingle();
+      if (profileError) {
+        throw new Error(`No se pudo resolver el perfil de ${username}: ${profileError.message}`);
+      }
+      if (!profile?.id) {
+        throw new Error(`No se encontró el perfil del usuario ${username}`);
+      }
+      const { error } = await supabase.functions.invoke('actualizar-usuario', {
+        body: { user_id: profile.id, roles }
+      });
+      if (error) {
+        const mensaje = await obtenerMensajeErrorFuncion(error, 'Error al actualizar los roles');
+        console.error('Error al actualizar roles:', mensaje);
+        throw new Error(mensaje);
+      }
+      const usuariosDB = await obtenerTodosLosUsuarios();
+      const mapped: UserCredentials[] = usuariosDB.map(u => ({
+        username: u.username,
+        password: u.password,
+        roles: u.roles
+      }));
+      setUsers(mapped);
+      return;
+    }
+    const updatedUsers = users.map(u =>
+      u.username === username ? { ...u, roles: rolesCsv } : u
+    );
+    setUsers(updatedUsers);
+    localStorage.setItem('elbuencafe_users', JSON.stringify(updatedUsers));
+  };
+
   const deleteUser = async (username: string) => {
     try {
       if (isSupabaseConfigured()) {
@@ -782,6 +823,7 @@ export const OrderProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       clearNotifications,
       users,
       saveUser,
+      updateUserRoles,
       deleteUser,
       updateAdminCredentials
     }}>
